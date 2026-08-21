@@ -84,12 +84,17 @@ std::string usage_text(const char* argv0) {
            "       [--stop-token-id N]... [--stop <text>]... [--reasoning-stop <text>]...\n"
            "       [--raw-output] [--print-token-ids] [--no-thinking]\n"
            "       [--reasoning-effort low|medium|xhigh] [--vision]\n"
+           "       [--vision-residency resident|overlay] [--vision-max-merged N]\n"
            "       [--no-cuda-graph]\n"
            "\n"
            "Streams answer content to stdout and reasoning plus diagnostics to stderr.\n"
            "Structured message content accepts text, image/image_url, and video/video_url parts;\n"
            "media sources may be local paths, HTTP(S) URLs, or base64 data URIs.\n"
            "--vision enables image/video input and loads the fixed Vision GPU allocations.\n"
+           "--vision-residency overlay keeps the vision tower host-pinned and encodes images\n"
+           "  through device memory borrowed from evicted read-only text weights, returning the\n"
+           "  tower's resident footprint to KV capacity (qwen3.8-27b family targets).\n"
+           "--vision-max-merged N bounds one item's merged vision tokens (default 32768).\n"
            "--kv-capacity auto leaves " +
            std::to_string(kDefaultKvCapacityHeadroomBytes / (1024ULL * 1024ULL)) +
            " MiB of sizing headroom.\n"
@@ -147,6 +152,22 @@ Options parse_options(int argc, char** argv) {
             options.reasoning_effort = parse_reasoning_effort(value(arg));
         } else if (arg == "--vision") {
             options.enable_vision = true;
+        } else if (arg == "--vision-residency") {
+            const std::string_view value = require_value("--vision-residency");
+            if (value == "resident") {
+                options.vision_residency = ninfer::VisionResidency::Resident;
+            } else if (value == "overlay") {
+                options.vision_residency = ninfer::VisionResidency::Overlay;
+            } else {
+                throw std::invalid_argument("--vision-residency accepts resident or overlay");
+            }
+        } else if (arg == "--vision-max-merged") {
+            const int value =
+                parse_nonnegative_int(require_value("--vision-max-merged"), "vision-max-merged");
+            if (value < 64 || value > 32768) {
+                throw std::invalid_argument("--vision-max-merged must be in [64, 32768]");
+            }
+            options.vision_max_merged_tokens = static_cast<std::uint32_t>(value);
         } else if (arg == "--no-cuda-graph") {
             options.use_cuda_graph = false;
         } else if (arg == "--stop-token-id") {

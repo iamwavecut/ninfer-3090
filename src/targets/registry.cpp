@@ -110,7 +110,8 @@ ConstructedTarget construct_registered(const EngineOptions& options, DeviceConte
     if (overlay_vision) {
         if (overlay_staging == 0) {
             throw std::invalid_argument(
-                "the selected target does not support --vision-residency overlay");
+                "the selected target does not support --vision-residency overlay yet "
+                "(supported: qwen3.8-27b family targets); use --vision-residency resident");
         }
         if (!EvictableWeightPool::supported(device.device)) {
             throw std::invalid_argument(

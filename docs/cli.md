@@ -154,7 +154,7 @@ measured recommendation rather than a semantic limit.
 | `--vision` | enable image/video input and load Vision GPU allocations | off |
 | `--vision-max-merged N` | largest merged vision-token count one item may carry (`[64, 32768]`); bounds the vision share of the startup workspace/transient reservations, so smaller values return memory to KV | `32768` |
 | `--kv-host-cache-mib N` | Pinned-host content cache for computed context: previously computed prefixes restore through PCIe instead of re-prefilling; branches sharing a prefix deduplicate against the same stored pages | `0` (off) |
-| `--vision-residency resident\|overlay` | `overlay` keeps Vision weights in pinned host memory and encodes each image through device memory temporarily borrowed from evicted read-only text weights (lm_head, embedding, draft/MTP heads), freeing the resident Vision footprint for KV; requires `--vision` and CUDA VMM | `resident` |
+| `--vision-residency resident\|overlay` | `overlay` keeps Vision weights in pinned host memory and encodes each image through device memory temporarily borrowed from evicted read-only text weights (lm_head, embedding, draft/MTP heads), freeing the resident Vision footprint for KV; requires `--vision` and CUDA VMM; currently supported for the qwen3.8-27b family targets | `resident` |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--no-thinking` | disable thinking in prompt rendering | thinking on |
 | `--reasoning-effort low\|medium\|xhigh` | select an effort exposed by the loaded chat template | template default |
