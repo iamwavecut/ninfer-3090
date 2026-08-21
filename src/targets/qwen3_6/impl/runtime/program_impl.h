@@ -600,6 +600,30 @@ runtime::PrefillStepResult ProgramImplCore::start_prefill_lane(std::uint32_t lan
         materialize_sequence_kv(sequence, prompt_tokens, backend_materialized);
         if (request_plan.reuse == ReusePath::ContentRestore) {
             content_cache->restore(sequence, *request_plan.content_restore, prompt, work, device);
+            // The lane's rewrite checkpoint belongs to its previous occupant. Unless the planner
+            // proved prefix identity up to the retained frontier (Keep/Reclassify), that slot
+            // holds another trajectory's state: retaining it poisons the next checkpoint restore
+            // AND the checkpoint anchor this request saves at completion. Rebuild it from the
+            // restored state when the desired boundary is exactly the restore frontier (the
+            // anchor state IS the boundary state); otherwise invalidate it.
+            const bool planner_kept =
+                request_plan.rewrite_checkpoint_action == RewriteCheckpointAction::KeepExisting ||
+                request_plan.rewrite_checkpoint_action ==
+                    RewriteCheckpointAction::ReclassifyExisting;
+            if (!planner_kept) {
+                const auto& desired = prompt.identity.rewrite_checkpoint;
+                if (desired && desired->frontier == base) {
+                    decoder->linear_attention.copy_slot(
+                        LinearStateSlots::current_state_slot(sequence.lane, max_concurrency),
+                        LinearStateSlots::rewrite_checkpoint_state_slot(sequence.lane,
+                                                                        max_concurrency),
+                        device.stream);
+                    sequence.rewrite_checkpoint =
+                        RewriteCheckpoint{true, desired->kind, desired->frontier};
+                } else {
+                    sequence.rewrite_checkpoint = {};
+                }
+            }
         }
         install_sampling(sequence, request, request_plan.sampling);
         sequence.rope_delta = prompt.rope_delta;
