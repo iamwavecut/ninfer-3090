@@ -153,21 +153,20 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--vision") {
             options.enable_vision = true;
         } else if (arg == "--vision-residency") {
-            const std::string_view value = require_value("--vision-residency");
-            if (value == "resident") {
+            const std::string_view residency = value(arg);
+            if (residency == "resident") {
                 options.vision_residency = ninfer::VisionResidency::Resident;
-            } else if (value == "overlay") {
+            } else if (residency == "overlay") {
                 options.vision_residency = ninfer::VisionResidency::Overlay;
             } else {
                 throw std::invalid_argument("--vision-residency accepts resident or overlay");
             }
         } else if (arg == "--vision-max-merged") {
-            const int value =
-                parse_nonnegative_int(require_value("--vision-max-merged"), "vision-max-merged");
-            if (value < 64 || value > 32768) {
+            const std::uint32_t merged = parse_u32(value(arg), "vision-max-merged");
+            if (merged < 64 || merged > 32768) {
                 throw std::invalid_argument("--vision-max-merged must be in [64, 32768]");
             }
-            options.vision_max_merged_tokens = static_cast<std::uint32_t>(value);
+            options.vision_max_merged_tokens = merged;
         } else if (arg == "--no-cuda-graph") {
             options.use_cuda_graph = false;
         } else if (arg == "--stop-token-id") {
