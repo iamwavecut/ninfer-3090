@@ -93,7 +93,7 @@ std::string usage_text(const char* argv0) {
            "--vision enables image/video input and loads the fixed Vision GPU allocations.\n"
            "--vision-residency overlay keeps the vision tower host-pinned and encodes images\n"
            "  through device memory borrowed from evicted read-only text weights, returning the\n"
-           "  tower's resident footprint to KV capacity (qwen3.8-27b family targets).\n"
+           "  tower's resident footprint to KV capacity.\n"
            "--vision-max-merged N budgets one item's merged vision tokens; oversized media\n"
            "  downscales at preprocessing to fit (default 32768).\n"
            "--kv-capacity auto leaves " +

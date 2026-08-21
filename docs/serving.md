@@ -117,7 +117,7 @@ finish-reason chunk and `[DONE]`. When `stream_options.include_usage` is true, a
 ### Multimodal request
 
 Start the server with `--vision` before sending media. Add `--vision-residency overlay` to keep
-the Vision tower out of resident device memory: images then encode inside a bounded exclusive Overlay residency currently supports the qwen3.8-27b family targets.
+the Vision tower out of resident device memory: images then encode inside a bounded exclusive
 window that borrows device memory from temporarily evicted read-only text weights and restores
 them before the next text step; the request log reports each window as
 `overlay=<ms> (evict <MiB> <ms>, restore <ms>, staged <MiB>)`. In overlay mode the encode
