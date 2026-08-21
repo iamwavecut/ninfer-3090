@@ -125,15 +125,15 @@ public:
         } else {
             store_->touch_segment(chain.final_key);
         }
-        const std::uint32_t checkpoint = sequence.turn_checkpoint.frontier;
-        if (sequence.turn_checkpoint.valid && checkpoint >= 2 * kPagedKVPageSize &&
+        const std::uint32_t checkpoint = sequence.rewrite_checkpoint.frontier;
+        if (sequence.rewrite_checkpoint.valid && checkpoint >= 2 * kPagedKVPageSize &&
             checkpoint < frontier) {
             const std::uint64_t checkpoint_key = chain.key_at(stream, checkpoint);
             if (!store_->find_anchor(checkpoint_key)) {
                 copied |= stage_segment(
                     sequence, chain, checkpoint, checkpoint_key,
                     std::min(backend_tokens, checkpoint),
-                    LinearStateSlots::turn_checkpoint_state_slot(sequence.lane, max_concurrency_),
+                    LinearStateSlots::rewrite_checkpoint_state_slot(sequence.lane, max_concurrency_),
                     work, device);
             }
         }

@@ -308,8 +308,6 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         std::uint64_t salt = content_chain::fold(0x6b76636163686531ULL,
                                                  static_cast<std::uint64_t>(kv_dtype));
         salt               = content_chain::fold(salt, static_cast<std::uint64_t>(kv_quant_group));
-        salt = content_chain::fold(salt, (kv_packed_v ? 1ULL : 0ULL) | (kv_rotate_k ? 2ULL : 0ULL) |
-                                             (kv_rotate_v ? 4ULL : 0ULL));
         salt = content_chain::fold(salt, static_cast<std::uint64_t>(speculative_backend));
         salt = content_chain::fold(salt, draft_window);
         content_cache = std::make_unique<ContentKvCache>(
