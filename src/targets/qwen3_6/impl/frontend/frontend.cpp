@@ -141,7 +141,8 @@ void validate_pixel_pipeline(const Json& config, std::string_view resource) {
     }
 }
 
-fi::ProcessorOptions processor_options(const FrontendResources& resources) {
+fi::ProcessorOptions processor_options(const FrontendResources& resources,
+                                       std::uint32_t vision_max_merged_tokens) {
     const Json image =
         parse_resource_json(resources.preprocessor_config_json, "preprocessor_config.json");
     const Json video = parse_resource_json(resources.video_preprocessor_config_json,
@@ -165,6 +166,16 @@ fi::ProcessorOptions processor_options(const FrontendResources& resources) {
     options.video_max_pixels = positive_u64(
         require_integer(video_size, "longest_edge", "video_preprocessor_config.json.size"),
         "video longest_edge");
+    if (vision_max_merged_tokens != 0) {
+        // Fit-and-scale: bound each item's merged tokens by shrinking the resize ceiling, so an
+        // oversized source downscales instead of being rejected at admission.
+        options.image_max_pixels = std::min(
+            options.image_max_pixels,
+            vision_max_merged_tokens * fi::merged_token_image_pixels());
+        options.video_max_pixels = std::min(
+            options.video_max_pixels,
+            vision_max_merged_tokens * fi::merged_token_video_pixels());
+    }
     options.video_fps =
         number_or_default(video, "fps", "video_preprocessor_config.json", kVideoFps);
     options.video_min_frames = static_cast<int>(
@@ -600,7 +611,8 @@ public:
               fi::TokenizerResources{.tokenizer_json         = resources.tokenizer_json,
                                      .tokenizer_config_json  = resources.tokenizer_config_json,
                                      .generation_config_json = resources.generation_config_json})),
-          processor(processor_options(resources)), vision_enabled(options.vision_enabled) {
+          processor(processor_options(resources, options.vision_max_merged_tokens)),
+          vision_enabled(options.vision_enabled) {
         if (options.max_context == 0) {
             throw std::invalid_argument("frontend max_context must be nonzero");
         }
