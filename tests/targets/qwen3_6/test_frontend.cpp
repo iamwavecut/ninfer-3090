@@ -1634,11 +1634,11 @@ int test_terminal_flush(const Frontend& frontend) {
 int test_structured_tool_output() {
     FrontendResources owned = resources();
     owned.tokenizer_json =
-        read_file("/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16/tokenizer.json");
+        read_file((official_hf_dir() + "/tokenizer.json").c_str());
     owned.tokenizer_config_json =
-        read_file("/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16/tokenizer_config.json");
+        read_file((official_hf_dir() + "/tokenizer_config.json").c_str());
     owned.generation_config_json =
-        read_file("/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16/generation_config.json");
+        read_file((official_hf_dir() + "/generation_config.json").c_str());
     const Frontend frontend = FrontendFactory::create_component(owned);
 
     ninfer::ChatMessage message;
