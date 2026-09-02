@@ -168,6 +168,10 @@ public:
     SequencePlanner& operator=(const SequencePlanner&) = delete;
 
     [[nodiscard]] const runtime::SequenceCapacityCurve& capacity_curve() const noexcept;
+    // Device bytes one overlay vision window needs beyond the streamed weights: the encode
+    // workspace peak plus the output handoff for the planned merged-token budget. Zero without
+    // vision.
+    [[nodiscard]] std::size_t vision_window_bytes() const noexcept;
     [[nodiscard]] SequencePlan<Variant> finalize(std::uint32_t main_page_groups) &&;
 
 public:

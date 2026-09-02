@@ -61,6 +61,9 @@ struct WorkspacePlan {
     std::size_t dflash_round     = 0;
     std::size_t general_capacity = 0;
     std::optional<VisionWorkspacePlan> vision;
+    // False in overlay residency: the vision encode workspace and handoff are borrowed per
+    // window instead of being folded into capacity.
+    bool vision_resident = true;
     std::size_t capacity = 0;
 };
 
@@ -78,6 +81,7 @@ struct SequencePlanningInputs {
     bool kv_rotate_v                       = false;
     ProposalHead proposal_head             = ProposalHead::Full;
     StartupFeatures features;
+    std::uint32_t vision_max_merged = 16384;
     bool use_cuda_graph = true;
     int device          = 0;
     ContextCacheOptions context_cache;
@@ -104,6 +108,7 @@ struct SequencePlanImpl<NINFER_QWEN36_VARIANT> {
     bool kv_rotate_v                       = false;
     ProposalHead proposal_head             = ProposalHead::Full;
     StartupFeatures features;
+    std::uint32_t vision_max_merged = 16384;
     bool use_cuda_graph = true;
     int device          = 0;
     ContextCacheOptions context_cache;

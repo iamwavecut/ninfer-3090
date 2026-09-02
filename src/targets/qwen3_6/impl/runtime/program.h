@@ -19,6 +19,7 @@
 #include "targets/qwen3_6/impl/runtime/prefix_identity.h"
 #include "targets/qwen3_6/impl/runtime/text_context.h"
 #include "targets/qwen3_6/impl/runtime/vision_context.h"
+#include "targets/qwen3_6/impl/runtime/vision_overlay.h"
 #include "targets/qwen3_6/impl/runtime/vision_prefill.h"
 
 #include <algorithm>
@@ -602,6 +603,8 @@ public:
     const bool kv_rotate_v;
     const ProposalHead proposal_head;
     const bool vision_enabled;
+    // Non-null in overlay residency: pool, pinned tower and window layout from the model view.
+    const VisionOverlayAssets* const vision_overlay;
     const bool use_cuda_graph;
     const std::size_t kv_payload_bytes;
     const std::size_t graph_allowance_bytes;
@@ -656,6 +659,9 @@ public:
 
     std::size_t workspace_logical_peak_bytes = 0;
     std::size_t vision_handoff_peak_bytes    = 0;
+    // Overlay residency only: the one-window broker and the per-lane pinned result slots.
+    std::optional<schedule::VisionResidencyBroker> vision_broker;
+    std::optional<schedule::PinnedResultPool> vision_results;
 
 private:
     void advance_resource_revision() noexcept {

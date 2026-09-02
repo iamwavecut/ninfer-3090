@@ -724,7 +724,9 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       kv_quant_group(plan.kv_quant_group), kv_packed_v(plan.kv_packed_v),
       kv_rotate_k(plan.kv_rotate_k), kv_rotate_v(plan.kv_rotate_v),
       proposal_head(plan.proposal_head),
-      vision_enabled(plan.features.vision), use_cuda_graph(plan.use_cuda_graph),
+      vision_enabled(plan.features.vision),
+      vision_overlay(model.vision_overlay ? &*model.vision_overlay : nullptr),
+      use_cuda_graph(plan.use_cuda_graph),
       kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
       persistent(plan.persistent.bytes), workspace_storage(plan.workspace.capacity),
@@ -755,7 +757,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     if (model.features != plan.features || model.mtp.has_value() != plan.features.mtp() ||
         model.dflash.has_value() != plan.features.dflash() ||
         model.optimized_proposal.has_value() != plan.features.optimized_proposal() ||
-        model.vision.has_value() != plan.features.vision) {
+        model.vision.has_value() != (plan.features.vision && !plan.features.overlay_vision()) ||
+        model.vision_overlay.has_value() != plan.features.overlay_vision()) {
         throw std::invalid_argument(
             "Qwen3.6 loaded weights do not match the frozen startup features");
     }
@@ -767,9 +770,17 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
     if (workspace_plan.general_capacity == 0 ||
         workspace_plan.vision.has_value() != vision_enabled ||
+        workspace_plan.vision_resident != !plan.features.overlay_vision() ||
         (workspace_plan.vision &&
          workspace_plan.vision->general_capacity_bytes != workspace_plan.general_capacity)) {
         throw std::invalid_argument("Qwen3.6 workspace plan does not match startup features");
+    }
+    if (vision_overlay != nullptr) {
+        if (vision_overlay->pool == nullptr || !workspace_plan.vision) {
+            throw std::invalid_argument("overlay vision assets are incomplete");
+        }
+        vision_broker.emplace(device, *vision_overlay->pool);
+        vision_results.emplace(max_concurrency, workspace_plan.vision->handoff_capacity_bytes);
     }
     const DeviceSpan backing = persistent.alloc_bytes(plan.persistent.bytes, 256);
     if (!plan.context_cache.max_private_continuations || !plan.context_cache.max_shared_prefixes) {
@@ -4094,10 +4105,18 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
             if (!workspace_plan.vision) {
                 throw std::logic_error("Vision prefill has no startup workspace plan");
             }
-            request.prefill->vision = std::make_unique<schedule::VisionPrefillSession>(
-                device, model, DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
-                *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
-                vision_handoff_peak_bytes);
+            if (vision_overlay != nullptr) {
+                request.prefill->vision = std::make_unique<schedule::VisionPrefillSession>(
+                    device, *workspace_plan.vision, request.prefill->prompt,
+                    *request.prefill->vision_plan, vision_handoff_peak_bytes, *vision_broker,
+                    *vision_overlay, vision_results->acquire());
+            } else {
+                request.prefill->vision = std::make_unique<schedule::VisionPrefillSession>(
+                    device, model,
+                    DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
+                    *workspace_plan.vision, request.prefill->prompt,
+                    *request.prefill->vision_plan, vision_handoff_peak_bytes);
+            }
         }
         request.prefill->elapsed_seconds =
             std::chrono::duration<double>(Clock::now() - host_started).count();
@@ -10213,6 +10232,15 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
         sequence.tail_hidden_valid      = true;
         request.timings.vision_seconds  = vision_seconds;
         request.timings.prefill_seconds = std::max(0.0, staged.elapsed_seconds - vision_seconds);
+        if (staged.vision) {
+            const schedule::VisionOverlayWindowStats overlay = staged.vision->overlay_stats();
+            request.timings.overlay_windows         = overlay.windows;
+            request.timings.overlay_window_seconds  = overlay.window_seconds;
+            request.timings.overlay_evict_seconds   = overlay.evict_seconds;
+            request.timings.overlay_restore_seconds = overlay.restore_seconds;
+            request.timings.overlay_evicted_bytes   = overlay.evicted_bytes;
+            request.timings.overlay_staged_bytes    = overlay.staged_bytes;
+        }
         staged.prompt.release_all_media_payloads();
         if (staged.vision) { staged.vision->retire_handoff(); }
 
@@ -10831,6 +10859,13 @@ MemorySummary ProgramImplCore::memory_summary() const noexcept {
             .handoff_capacity_bytes = workspace_plan.vision->handoff_capacity_bytes,
             .handoff_active_bytes   = active_handoff_bytes,
             .handoff_peak_bytes     = vision_handoff_peak_bytes,
+            .residency = vision_overlay != nullptr ? VisionResidency::Overlay
+                                                   : VisionResidency::Resident,
+            .window_capacity_bytes =
+                vision_overlay != nullptr ? vision_overlay->window_capacity_bytes : 0,
+            .pinned_weight_bytes =
+                vision_overlay != nullptr ? vision_overlay->pinned_block.size() : 0,
+            .mirror_bytes = vision_overlay != nullptr ? vision_overlay->pool->mirror_bytes() : 0,
         };
     }
     out.workspace_logical_peak_bytes = workspace_logical_peak_bytes;
