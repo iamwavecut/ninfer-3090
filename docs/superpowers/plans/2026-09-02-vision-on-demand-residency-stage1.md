@@ -38,7 +38,7 @@ ssh "${SSHO[@]}" -p $PORT root@$IP 'export PATH=/usr/local/cuda-13.1/bin:$PATH; 
 ssh "${SSHO[@]}" -p $PORT root@$IP 'export PATH=/usr/local/cuda-13.1/bin:$PATH NINFER_QWEN3_6_27B_HF_DIR=/root/hf27 NINFER_QWEN3_6_27B_ARTIFACT=/root/qwen3_8_27b.ninfer; (setsid nohup bash -c "cmake --build /root/vod/build86 --parallel 2>&1 | grep -E \"error|FAILED\" | head -30; ninja -C /root/vod/build86 -n | grep -q \"no work to do\" && echo BUILD-OK || echo BUILD-FAIL; ctest --test-dir /root/vod/build86 -R \"<filter>\" --output-on-failure 2>&1 | tail -40; echo CTEST-DONE" </dev/null >/root/build.log 2>&1 &)'
 ```
 
-Baseline before Task 1: full `ctest` on the untouched tree passes except the known frontend hard-coded tokenizer path test (fixed in Task 1 as a prerequisite), and `ninfer-serve --vision --kv-dtype rk8v4 --kv-capacity 172032` boots while `212992` does not.
+Baseline before Task 1: full `ctest` on the untouched tree passes, and `ninfer-serve --vision --kv-dtype rk8v4 --kv-capacity 172032` boots while `212992` does not.
 
 ---
 
@@ -49,7 +49,6 @@ Baseline before Task 1: full `ctest` on the untouched tree passes except the kno
 - Modify: `src/serve/serve_options.h`, `src/serve/serve_options.cpp` (parse block `:284`, validation `:355-362`, usage `:82-99`)
 - Modify: `apps/cli/options.cpp` (parse `:154`, usage `:88-94`, validation `:218`)
 - Modify: `src/targets/qwen3_6/export/ninfer/targets/qwen3_6/startup_features.h`
-- Modify: `tests/targets/qwen3_6/test_frontend.cpp:1637-1641` (route through `official_hf_dir()`)
 - Test: `tests/test_serve_options.cpp`
 
 **Interfaces:**
@@ -142,7 +141,7 @@ struct StartupFeatures {
 }
 ```
 
-`tests/targets/qwen3_6/test_frontend.cpp:1637-1641`: replace the three `read_file("/home/neroued/.../X.json")` calls with `read_file((official_hf_dir() + "/X.json").c_str())` (the same fix as `iamwavecut/ninfer-3090` commit `beaba6b3`).
+(The hard-coded tokenizer path only exists on branches carrying upstream `4cece118`; this base has none — nothing to do.)
 
 - [ ] **Step 4: Build and run** `ctest -R "serve_options|frontend"` on the pod. Expected: PASS.
 
@@ -408,7 +407,7 @@ TEST_CASE("overlay plans reserve no vision workspace and bound items by the budg
 - Modify: `src/targets/qwen3_6/impl/runtime/text_context_impl.h` (`:1170-1182`), `text_prefill_impl.h` (`mtp_bridge_multimodal` `:94-129`)
 - Modify: `src/targets/qwen3_6/impl/runtime/program.h` / `program_impl.h` (`reserve_materialization` `:4093-4101`, prefill completion `:10216-10217`, timings `:1663-1671` equivalent)
 - Modify: `src/targets/qwen3_6/impl/runtime/instantiate.h` (include)
-- Test: `tests/targets/qwen3_6/test_vision_overlay_parity.cpp` (+ `tests/CMakeLists.txt`)
+- Test: parity is established at the serving boundary by `tools/smoke/overlay_ab.py` (greedy completions of an image turn and a follow-up turn must be byte-identical between residencies, 1080p and 4000×3000) run in Task 8; an in-process embeddings comparison would need two engine instances on one 24 GiB card and is not built.
 
 **Interfaces:**
 
