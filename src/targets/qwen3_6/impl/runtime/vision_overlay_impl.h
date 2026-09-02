@@ -236,8 +236,16 @@ public:
         using overlay_detail::OverlayClock;
         using overlay_detail::staging_align;
         const std::size_t staging = staging_align(assets_.layout.staging_bytes);
-        const std::size_t need    = staging + window_plan_.capacity_bytes;
-        const auto window_start   = OverlayClock::now();
+        // Size the window for this item, not for the planned maximum: fewer chunks to remap and
+        // fewer bytes to restore. The planned window bounds it.
+        const VisionWorkspacePlan item_plan = VisionContext::plan_workspace(
+            control.merged_count,
+            VisionContext::workspace_bytes(control.patch_count, control.merged_count));
+        if (item_plan.capacity_bytes > window_plan_.capacity_bytes) {
+            throw std::invalid_argument("vision item exceeds the overlay window budget");
+        }
+        const std::size_t need  = staging + item_plan.capacity_bytes;
+        const auto window_start = OverlayClock::now();
         EvictableWeightPool::Transaction transaction = broker_.acquire(need);
         auto* const base       = static_cast<std::byte*>(transaction.leased().data);
         const DeviceSpan backing{base + staging, transaction.leased().bytes - staging};
@@ -246,8 +254,8 @@ public:
             VisionWeightStream stream(device_, assets_, base);
             const qwen3_6::VisionWeights view = stream.window_weights(assets_.host.weights);
             const VisionContext context(device_, view);
-            Tensor output = VisionContext::bind_output(backing, window_plan_, control.merged_count);
-            context.encode(item, output, backing, window_plan_, &stream);
+            Tensor output = VisionContext::bind_output(backing, item_plan, control.merged_count);
+            context.encode(item, output, backing, item_plan, &stream);
             result_bytes = output.bytes();
             if (result_bytes > result_.bytes().size()) {
                 throw std::logic_error("vision item embeddings exceed the pinned result slot");
