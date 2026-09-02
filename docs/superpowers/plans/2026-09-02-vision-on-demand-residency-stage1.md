@@ -54,7 +54,7 @@ Baseline before Task 1: full `ctest` on the untouched tree passes, and `ninfer-s
 **Interfaces:**
 - Produces: `enum class VisionResidency : std::uint8_t { Resident, Overlay };` in `namespace ninfer`; `EngineOptions::vision_residency` (default `Resident`), `EngineOptions::vision_max_merged_tokens` (`std::uint32_t`, default `16384`); `ServeOptions::vision_residency`, `ServeOptions::vision_max_merged_tokens`; `StartupFeatures::vision_residency` and `StartupFeatures::overlay_vision()` (`vision && vision_residency == VisionResidency::Overlay`).
 
-- [ ] **Step 1: Write the failing serve-option tests**
+- [x] **Step 1: Write the failing serve-option tests**
 
 Append to `tests/test_serve_options.cpp` (follow the file's existing `parse(...)`/`expect_throw` helpers):
 
@@ -79,11 +79,11 @@ TEST_CASE("vision residency defaults to resident with the item maximum") {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Sync, build, `ctest -R serve_options`. Expected: compile error (`VisionResidency` undefined).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `include/ninfer/types.h`, next to `enable_vision`:
 
@@ -143,9 +143,9 @@ struct StartupFeatures {
 
 (The hard-coded tokenizer path only exists on branches carrying upstream `4cece118`; this base has none — nothing to do.)
 
-- [ ] **Step 4: Build and run** `ctest -R "serve_options|frontend"` on the pod. Expected: PASS.
+- [x] **Step 4: Build and run** `ctest -R "serve_options|frontend"` on the pod. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/ninfer/types.h src/serve apps/cli/options.cpp src/targets/qwen3_6/export/ninfer/targets/qwen3_6/startup_features.h tests/test_serve_options.cpp tests/targets/qwen3_6/test_frontend.cpp
@@ -174,7 +174,7 @@ git commit -m "feat(options): vision residency mode and per-item merged-token bu
   - `MaterializedArtifact`: `void* storage_data(ObjectHandle) const` (device pointer, else pinned pointer, else nullptr), `bool is_host_pinned(ObjectHandle) const`, `std::uint64_t pinned_offset(ObjectHandle) const`, `std::span<std::byte> pinned_block() const`, `MaterializationStats::pinned_weight_bytes`.
   - `MaterializedArtifact materialize(const Reader&, const MaterializationPlan&, DeviceContext&, LoadProgress* = nullptr, EvictableWeightPool* backing_pool = nullptr);` — the pool parameter is added in Task 3; in this task add the parameter as a forward-declared pointer defaulting to `nullptr` and ignore it.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_artifact_materialization.cpp`, reuse its synthetic-artifact writer):
+- [x] **Step 1: Write the failing tests** (append to `tests/test_artifact_materialization.cpp`, reuse its synthetic-artifact writer):
 
 ```cpp
 TEST_CASE("ranked objects are packed at the evictable tail in rank order") {
@@ -213,17 +213,17 @@ TEST_CASE("host-pinned objects land in one pinned block and get no device offset
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — compile error on `materialize_on_host_pinned`.
+- [x] **Step 2: Run to verify it fails** — compile error on `materialize_on_host_pinned`.
 
-- [ ] **Step 3: Implement** — port from PR #8 (`git show ghfork/feat/vision-vram-overlay:src/artifact/binder.cpp`, `materializer.cpp`, `typed_binding.cpp`) with these deltas:
+- [x] **Step 3: Implement** — port from PR #8 (`git show ghfork/feat/vision-vram-overlay:src/artifact/binder.cpp`, `materializer.cpp`, `typed_binding.cpp`) with these deltas:
   1. `Binder::finish(evictable_alignment)`: after placing unranked objects, set `evictable_tail_offset = align_up(device_capacity_bytes, evictable_alignment)`, then place ranked objects (stable-sorted by rank ascending) with their own natural alignment starting there. Do **not** modify any object's `alignment` field (PR #8 inflated the first tail tensor's alignment to 16 MiB).
   2. `materialize()`: place every device object at `placement.offset` directly (`arena.base() + offset`), replacing the bump-replay + `actual_offset == placement.offset` assertion. Keep the coalesced direct-I/O read spans and the 4096-aligned staging slots.
   3. Pinned objects: one `PinnedHostBuffer(plan.pinned_capacity_bytes)`; fill each from `reader.payload(handle)` with `std::memcpy`; record `ObjectStorage{device=nullptr, pinned=block+offset, pinned_offset}`; `stats_.pinned_weight_bytes`.
   4. `typed_binding.cpp`: `materialized_weight`/`materialized_tensor`/`row_split_weight` use `storage_data()`; `bind_tensor` gains `evict_rank` and a `switch` over the three placements.
 
-- [ ] **Step 4: Build and run** `ctest -R artifact_materialization`. Expected: PASS, and the pre-existing cases in that file still pass (offset layout of unranked objects unchanged).
+- [x] **Step 4: Build and run** `ctest -R artifact_materialization`. Expected: PASS, and the pre-existing cases in that file still pass (offset layout of unranked objects unchanged).
 
-- [ ] **Step 5: Commit** `git commit -m "feat(artifact): host-pinned placement and evict-ranked device tail"`.
+- [x] **Step 5: Commit** `git commit -m "feat(artifact): host-pinned placement and evict-ranked device tail"`.
 
 ---
 
@@ -269,7 +269,7 @@ public:
 }
 ```
 
-- [ ] **Step 1: Write the failing tests** — port `tests/test_evictable_weight_pool.cu` and `tests/test_vmm_graph_remap.cu` from PR #8 (skip code 77 when VMM unsupported), then add:
+- [x] **Step 1: Write the failing tests** — port `tests/test_evictable_weight_pool.cu` and `tests/test_vmm_graph_remap.cu` from PR #8 (skip code 77 when VMM unsupported), then add:
 
 ```cpp
 TEST_CASE("restore re-uploads only the dirtied chunk range") {
@@ -284,13 +284,13 @@ TEST_CASE("close is noexcept and marks the pool poisoned when the device is brok
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — target does not exist.
+- [x] **Step 2: Run to verify it fails** — target does not exist.
 
-- [ ] **Step 3: Implement** — port `src/core/evictable_weight_pool.{h,cu}` from PR #8 with deltas: (a) overlay VA reserved for `window_capacity_bytes` only; (b) `capture_window_mirror` copies `[arena_bytes - window_capacity_bytes, arena_bytes)`; (c) `evict()` performs `cudaStreamSynchronize(device.stream)` and `cudaStreamSynchronize(device.transfer_stream)` before any `cuMemUnmap`, and refuses when `transaction_open()`; (d) `close()` remaps home and uploads only `[tail_end - mapped_bytes, tail_end)` from the mirror, then `cudaStreamSynchronize(stream)`; every CUDA/CU error inside `close()` is caught, logged via `console_log`, and sets `poisoned_ = true`; (e) chunk pieces keep stable VAs (unchanged from PR #8); (f) `tests/CMakeLists.txt` registers both tests with `SKIP_RETURN_CODE 77`.
+- [x] **Step 3: Implement** — port `src/core/evictable_weight_pool.{h,cu}` from PR #8 with deltas: (a) overlay VA reserved for `window_capacity_bytes` only; (b) `capture_window_mirror` copies `[arena_bytes - window_capacity_bytes, arena_bytes)`; (c) `evict()` performs `cudaStreamSynchronize(device.stream)` and `cudaStreamSynchronize(device.transfer_stream)` before any `cuMemUnmap`, and refuses when `transaction_open()`; (d) `close()` remaps home and uploads only `[tail_end - mapped_bytes, tail_end)` from the mirror, then `cudaStreamSynchronize(stream)`; every CUDA/CU error inside `close()` is caught, logged via `console_log`, and sets `poisoned_ = true`; (e) chunk pieces keep stable VAs (unchanged from PR #8); (f) `tests/CMakeLists.txt` registers both tests with `SKIP_RETURN_CODE 77`.
 
-- [ ] **Step 4: Build and run** `ctest -R "evictable_weight_pool|vmm_graph_remap"`. Expected: PASS on the 3090 (VMM supported).
+- [x] **Step 4: Build and run** `ctest -R "evictable_weight_pool|vmm_graph_remap"`. Expected: PASS on the 3090 (VMM supported).
 
-- [ ] **Step 5: Commit** `git commit -m "feat(core): VMM-backed evictable weight pool with window-sized overlay and mirror"`.
+- [x] **Step 5: Commit** `git commit -m "feat(core): VMM-backed evictable weight pool with window-sized overlay and mirror"`.
 
 ---
 
@@ -333,19 +333,19 @@ std::size_t vision_window_capacity_bytes(const VisionOverlayLayout&, std::uint32
 
 `VisionOverlayLayout` is computed from the **plan's pinned offsets of the named objects** (`plan.pinned_objects` looked up by handle), grouping by explicit object lists — no "sum + 4096×count" heuristic. `vision_window_capacity_bytes = align_up(staging + VisionContext::workspace_bytes(4·M, M) + output_handoff_bytes(M), kChunkBytes)` with `M = vision_max_merged_tokens`.
 
-- [ ] **Step 1: Write the failing test** — in `tests/test_artifact_materialization.cpp`: build a synthetic plan with three pinned objects named like `vision/layers/0/attn/qkv` … and assert `compute_vision_overlay_layout` returns ranges equal to the plan offsets and `staging_bytes == align256(prelude) + align256(merger) + 2*align256(slot)`.
+- [x] **Step 1: Write the failing test** — in `tests/test_artifact_materialization.cpp`: build a synthetic plan with three pinned objects named like `vision/layers/0/attn/qkv` … and assert `compute_vision_overlay_layout` returns ranges equal to the plan offsets and `staging_bytes == align256(prelude) + align256(merger) + 2*align256(slot)`.
 
-- [ ] **Step 2: Run to verify it fails.**
+- [x] **Step 2: Run to verify it fails.**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   1. 27B `bind_artifact(binder, profile, features)`: `const auto vision_placement = features.overlay_vision() ? HostPinned : features.vision ? Device : ValidateOnly;` and ranks `kEvictRankMtp=400`, `kEvictRankDraftHead=500`, `kEvictRankEmbedding=600`, `kEvictRankLmHead=700` on the corresponding `bind_tensor` calls; `binder.finish(features.overlay_vision() ? EvictableWeightPool::kChunkBytes : 1)`. Same on 35B-A3B.
   2. `LoadPlan` gains `std::optional<VisionOverlayLayout> vision_overlay` (27B and 35B) computed from the plan after `finish()`.
   3. `LoadedModelData` (both targets): in overlay mode materialize the vision group into `HostVisionWeights` via `materialize_vision_common` over `storage_data()`; `LoadedModelData::vision` (the device view) stays `nullopt` so `VisionContext(DeviceContext&, const LoadedModelData&)` throws its existing "requested without materialized weights" if anyone tries; publish `ModelView::vision_overlay`.
   4. `registry.cpp construct_registered`: when `features.overlay_vision()`: check `EvictableWeightPool::supported(device)` (else throw `"--vision-residency overlay requires CUDA virtual memory management support"`), require `load_plan.vision_overlay` (else `"the selected target does not support --vision-residency overlay"`), compute `window_capacity_bytes`, construct the pool with `{plan.device_capacity_bytes, plan.evictable_tail_bytes, window}` **before** `materialize(...)`, pass it as `backing_pool`, and call `pool.capture_window_mirror(device.transfer_stream)` after `construct_loaded_model`. `preflight_runtime_bytes` uses `plan.device_capacity_bytes` as today (the pinned block is host memory).
 
-- [ ] **Step 4: Build; run** `ctest -R artifact_materialization`; then a boot check on the pod: `ninfer-serve --artifact /root/qwen3_8_27b.ninfer --vision --vision-residency overlay --kv-dtype rk8v4 --kv-capacity 65536 --port 8090` must start and log `overlay vision: tower 282 MiB pinned, window 1.0 GiB` (add that log line in registry). Expected: boots; `free-after-weights` is 282 MiB higher than resident.
+- [x] **Step 4: Build; run** `ctest -R artifact_materialization`; then a boot check on the pod: `ninfer-serve --artifact /root/qwen3_8_27b.ninfer --vision --vision-residency overlay --kv-dtype rk8v4 --kv-capacity 65536 --port 8090` must start and log `overlay vision: tower 282 MiB pinned, window 1.0 GiB` (add that log line in registry). Expected: boots; `free-after-weights` is 282 MiB higher than resident.
 
-- [ ] **Step 5: Commit** `git commit -m "feat(qwen3.6): load the vision tower host-pinned and rank the evictable weight tail"`.
+- [x] **Step 5: Commit** `git commit -m "feat(qwen3.6): load the vision tower host-pinned and rank the evictable weight tail"`.
 
 ---
 
@@ -365,7 +365,7 @@ std::size_t vision_window_capacity_bytes(const VisionOverlayLayout&, std::uint32
 - `TextPrefillRoots::visual_embeddings` (`Tensor`, BF16 `[hidden, scatter_tokens]`, allocated only when `overlay`); `text_prefill_roots<Config>(allocator, tokens, rope_axes, scatter_tokens, bool overlay_staging)`.
 - `ProgramImplCore::vision_overlay` (`const VisionOverlayAssets*`, from the model view) and `ProgramImplCore::vision_max_merged`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```cpp
 TEST_CASE("overlay plans reserve no vision workspace and bound items by the budget") {
@@ -384,18 +384,18 @@ TEST_CASE("overlay plans reserve no vision workspace and bound items by the budg
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails.**
+- [x] **Step 2: Run to verify it fails.**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   1. `build_workspace_plan`: `merged = min(plan.capacity, kMaximumVisionItemTokens, plan.vision_max_merged)`; `out.vision = plan_workspace(merged, general)`; `out.vision_resident = !plan.features.overlay_vision(); if (out.vision_resident) out.capacity = max(out.capacity, out.vision->capacity_bytes);`.
   2. `text_prefill` envelope: pass `overlay_staging = plan.features.overlay_vision()` into `text_prefill_roots`, which allocates `visual_embeddings = matrix(allocator, BF16, Config::hidden, scatter_tokens)` when set.
   3. `program_impl.h` ctor: replace the `workspace_plan.vision.has_value() == vision_enabled` assertion by `has_value() == vision_enabled && vision_resident == !overlay`; `VisionPrefillSession` construction stays for resident mode; overlay wiring lands in Task 6.
   4. `plan_vision_control`: in overlay mode validate `item.merged_count <= vision_max_merged` and `vision_window_bytes(layout, patches, merged) <= window_capacity_bytes` (message `"vision item exceeds the overlay window budget"`); resident mode unchanged.
   5. Memory summary: `VisionWorkspaceMemorySummary` gains `residency` (`VisionResidency`), `window_capacity_bytes`, `pinned_weight_bytes`, `mirror_bytes` (declare them in `include/ninfer/types.h:590-601` and fill from the assets).
 
-- [ ] **Step 4: Build; run** `ctest -R "sequence_plan|artifact"`; boot check: overlay boot at `--kv-capacity 212992 --kv-dtype rk8v4` now succeeds (was 172032). Expected: PASS and the boot line shows `runtime` ≈ the no-vision value.
+- [x] **Step 4: Build; run** `ctest -R "sequence_plan|artifact"`; boot check: overlay boot at `--kv-capacity 212992 --kv-dtype rk8v4` now succeeds (was 172032). Expected: PASS and the boot line shows `runtime` ≈ the no-vision value.
 
-- [ ] **Step 5: Commit** `git commit -m "feat(qwen3.6): plan overlay vision without resident workspace or handoff"`.
+- [x] **Step 5: Commit** `git commit -m "feat(qwen3.6): plan overlay vision without resident workspace or handoff"`.
 
 ---
 
@@ -448,7 +448,7 @@ Behaviour of `VisionPrefillSession::prepare_chunk` in overlay mode: on a new ite
 
 `VisionContext` gains a constructor over a rebased window view (`VisionContext(DeviceContext&, const VisionWeights& window_view)`) and `encode(..., VisionWeightStream* = nullptr)` hooks exactly as in PR #8 (`prelude_ready`, `arrive(layer)`, `merger_ready`).
 
-- [ ] **Step 1: Write the failing parity test** (`tests/targets/qwen3_6/test_vision_overlay_parity.cpp`, skips with code 77 unless `NINFER_QWEN3_6_27B_ARTIFACT` and the HF dir are set):
+- [x] **Step 1: Write the failing parity test** (`tests/targets/qwen3_6/test_vision_overlay_parity.cpp`, skips with code 77 unless `NINFER_QWEN3_6_27B_ARTIFACT` and the HF dir are set):
 
 ```cpp
 // Loads the 27B twice (resident and overlay, --kv-capacity 4096), prepares the same synthetic
@@ -458,13 +458,13 @@ Behaviour of `VisionPrefillSession::prepare_chunk` in overlay mode: on a new ite
 TEST_CASE("overlay window embeddings are bit-identical to resident encode") { ... }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — overlay engine throws "requested without materialized weights" (Task 4 state).
+- [x] **Step 2: Run to verify it fails** — overlay engine throws "requested without materialized weights" (Task 4 state).
 
-- [ ] **Step 3: Implement** — port `vision_overlay_impl.h` from PR #8 into the two new files with these deltas: (a) one window per item (`encode_item`), not per request; (b) embeddings go to the pre-allocated `PinnedResultPool` slot (no `cudaMallocHost`); (c) window need computed for the item only; (d) `RestoreGuard` replaced by `Lease` whose `release()` is `noexcept` via `Transaction::close()`; (e) stats via CUDA events on `device.stream` only; (f) `VisionPrefillSession` owns `std::unique_ptr<VisionOverlaySession>` and the chunk-local path above; (g) Program: construct `VisionResidencyBroker` and `PinnedResultPool` in the ctor when `vision_overlay`, pass the lane's slot into the session in `reserve_materialization`, and after every prefill unit `if (broker.poisoned()) throw std::runtime_error("vision overlay restore failed; weights are no longer trustworthy")`; sum window stats into `request.timings.overlay_*` (add fields to `GenerationTimings`).
+- [x] **Step 3: Implement** — port `vision_overlay_impl.h` from PR #8 into the two new files with these deltas: (a) one window per item (`encode_item`), not per request; (b) embeddings go to the pre-allocated `PinnedResultPool` slot (no `cudaMallocHost`); (c) window need computed for the item only; (d) `RestoreGuard` replaced by `Lease` whose `release()` is `noexcept` via `Transaction::close()`; (e) stats via CUDA events on `device.stream` only; (f) `VisionPrefillSession` owns `std::unique_ptr<VisionOverlaySession>` and the chunk-local path above; (g) Program: construct `VisionResidencyBroker` and `PinnedResultPool` in the ctor when `vision_overlay`, pass the lane's slot into the session in `reserve_materialization`, and after every prefill unit `if (broker.poisoned()) throw std::runtime_error("vision overlay restore failed; weights are no longer trustworthy")`; sum window stats into `request.timings.overlay_*` (add fields to `GenerationTimings`).
 
-- [ ] **Step 4: Build; run** `ctest -R "vision_overlay_parity|frontend|serve_options"`; then a serve smoke on the pod with `tools/smoke/overlay_ab.py` (Task 7 brings the tool; for now `curl` one image request and read the log line). Expected: parity PASS; image answer identical to resident.
+- [x] **Step 4: Build; run** `ctest -R "vision_overlay_parity|frontend|serve_options"`; then a serve smoke on the pod with `tools/smoke/overlay_ab.py` (Task 7 brings the tool; for now `curl` one image request and read the log line). Expected: parity PASS; image answer identical to resident.
 
-- [ ] **Step 5: Commit** `git commit -m "feat(qwen3.6): per-item overlay vision windows with pinned handoff and chunk-local staging"`.
+- [x] **Step 5: Commit** `git commit -m "feat(qwen3.6): per-item overlay vision windows with pinned handoff and chunk-local staging"`.
 
 ---
 
@@ -478,7 +478,7 @@ TEST_CASE("overlay window embeddings are bit-identical to resident encode") { ..
 - Modify: `docs/cli.md`, `docs/serving.md` (residency section), `docs/performance.md` (new measured table, Task 8)
 - Test: `tests/test_request_log.cpp`, `tests/targets/qwen3_6/test_frontend.cpp`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```cpp
 // test_frontend.cpp: a 4000x3000 image with vision_max_merged_tokens=1024 prepares <= 1024 merged tokens
@@ -486,13 +486,13 @@ TEST_CASE("media larger than the merged-token budget is downscaled, not rejected
 // test_request_log.cpp: timings with overlay_window_seconds=0.386 render "overlay=386ms (evict 80MiB 1ms, restore 11ms, staged 282MiB)"
 ```
 
-- [ ] **Step 2: Run to verify they fail.**
+- [x] **Step 2: Run to verify they fail.**
 
-- [ ] **Step 3: Implement** — port the fit-and-scale block from PR #8 `frontend.cpp:180-191` (fix its indentation), log the effective pixel ceilings once at startup (`console_log` in `registry.cpp`: `vision budget: N merged tokens -> image <= P pixels, video <= Q pixels`), request-log line and JSON, docs sections (copy PR #8's `docs/serving.md` residency section, updated for per-item windows and the new numbers placeholder to be filled in Task 8), `tools/smoke/overlay_ab.py` unchanged from PR #8 except the port/URL defaults.
+- [x] **Step 3: Implement** — port the fit-and-scale block from PR #8 `frontend.cpp:180-191` (fix its indentation), log the effective pixel ceilings once at startup (`console_log` in `registry.cpp`: `vision budget: N merged tokens -> image <= P pixels, video <= Q pixels`), request-log line and JSON, docs sections (copy PR #8's `docs/serving.md` residency section, updated for per-item windows and the new numbers placeholder to be filled in Task 8), `tools/smoke/overlay_ab.py` unchanged from PR #8 except the port/URL defaults.
 
-- [ ] **Step 4: Build; run** `ctest -R "request_log|frontend"`. Expected: PASS.
+- [x] **Step 4: Build; run** `ctest -R "request_log|frontend"`. Expected: PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "feat(serve): overlay window telemetry and merged-token media budget"`.
+- [x] **Step 5: Commit** `git commit -m "feat(serve): overlay window telemetry and merged-token media budget"`.
 
 ---
 
@@ -502,10 +502,10 @@ TEST_CASE("media larger than the merged-token budget is downscaled, not rejected
 - Create (scratchpad, not committed): `$SP/vod_battery.sh`
 - Modify: `docs/performance.md` (measured table), PR body draft `$SP/pr_body_vod.md`
 
-- [ ] **Step 1: Battery script** — phases, each with `PHASEn-DONE` markers and unbuffered output: (1) full `ctest`; (2) capacity bisect (64-token granularity) for `resident` and `overlay` at int8/rk8v4/bf16 with `--vision --vision-max-merged 12288 --spec mtp --draft-tokens 3 --lm-head-draft --max-concurrency 1`; (3) `tools/smoke/overlay_ab.py` for a 1920×1080 gradient image and a 4000×3000 image: greedy answers must be byte-identical between modes, follow-up turn opens no window, `--concurrency-probe`; (4) perf: long prefill (7.7k) and short decode (320) tok/s in both modes without images; (5) window stats from the serve log (window/evict/restore/staged), TTFT resident vs overlay.
-- [ ] **Step 2: Run detached on the pod** (`setsid nohup`), monitor with one-shot satellites (≤60 s, 15 s snapshots, absolute progress, GPU/RAM/disk, liveness).
-- [ ] **Step 3: Fill the table** in `docs/performance.md` and the PR body (`$SP/pr_body_vod.md`): capacity (expect overlay == no-vision), window latency, TTFT delta, parity, perf parity, host RAM.
-- [ ] **Step 4: Commit** `git commit -m "docs(perf): on-demand vision residency measurements on RTX 3090"`; push `ghfork feat/vision-on-demand-residency`; open the draft PR in `Don-Chad/ninfer-3090` against `release/v0.6.2-rtx3090` with the body; do not ship `docs/superpowers/**` (remove them in a final commit before opening the PR, keep them on a local `vod-notes` branch).
+- [x] **Step 1: Battery script** — phases, each with `PHASEn-DONE` markers and unbuffered output: (1) full `ctest`; (2) capacity bisect (64-token granularity) for `resident` and `overlay` at int8/rk8v4/bf16 with `--vision --vision-max-merged 12288 --spec mtp --draft-tokens 3 --lm-head-draft --max-concurrency 1`; (3) `tools/smoke/overlay_ab.py` for a 1920×1080 gradient image and a 4000×3000 image: greedy answers must be byte-identical between modes, follow-up turn opens no window, `--concurrency-probe`; (4) perf: long prefill (7.7k) and short decode (320) tok/s in both modes without images; (5) window stats from the serve log (window/evict/restore/staged), TTFT resident vs overlay.
+- [x] **Step 2: Run detached on the pod** (`setsid nohup`), monitor with one-shot satellites (≤60 s, 15 s snapshots, absolute progress, GPU/RAM/disk, liveness).
+- [x] **Step 3: Fill the table** in `docs/performance.md` and the PR body (`$SP/pr_body_vod.md`): capacity (expect overlay == no-vision), window latency, TTFT delta, parity, perf parity, host RAM.
+- [x] **Step 4: Commit** `git commit -m "docs(perf): on-demand vision residency measurements on RTX 3090"`; push `ghfork feat/vision-on-demand-residency`; open the draft PR in `Don-Chad/ninfer-3090` against `release/v0.6.2-rtx3090` with the body; do not ship `docs/superpowers/**` (remove them in a final commit before opening the PR, keep them on a local `vod-notes` branch).
 
 ---
 

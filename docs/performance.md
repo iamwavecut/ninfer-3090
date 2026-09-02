@@ -556,3 +556,37 @@ Each category contains three fixtures and five seeds per fixture, for 15 samples
 | Story | 15 | 126.1 ± 10.9 | 37.4% ± 5.8% | 2.12 ± 0.17 |
 | Translation | 15 | 192.3 ± 11.9 | 75.0% ± 6.5% | 3.25 ± 0.19 |
 | Structured | 15 | 219.8 ± 8.6 | 90.8% ± 5.1% | 3.72 ± 0.15 |
+
+### Vision residency on RTX 3090 (`groupwise-int`, sm_86)
+
+Dedicated RunPod RTX 3090 (24 GiB, driver 580.159, CUDA 13.1 build, nothing else on the GPU).
+Server flags common to every row: `--kv-capacity auto --max-concurrency 1 --prefill-chunk 1024
+--spec mtp --draft-tokens 3 --lm-head-draft`; the vision rows add `--vision --vision-max-merged
+12288` with `--vision-residency resident` or `overlay`. Maximum `--max-context` that boots,
+bisected to 8192 tokens:
+
+| `--kv-dtype` | no `--vision` | resident Vision | overlay Vision |
+|---|---|---|---|
+| `int8` | 147 456 | 122 880 | **147 456** |
+| `rk8v4` | 196 608 | 163 840 | **196 608** |
+| `bf16` | 73 728 | 65 536 | **73 728** |
+
+Overlay boots the no-vision capacity in every storage mode: the resident Vision cost
+(24 576 / 32 768 / 8 192 tokens) is gone. `free-after-weights` rises by 0.26 GiB (the tower is
+host-pinned) and the startup runtime reservation drops from 2.66 GiB to 2.23 GiB at 65 536 tokens.
+
+Greedy completions of a 1920×1080 gradient image (2074 merged tokens), of a 4000×3000 image
+downscaled by the budget to 11 767 merged tokens, and of their follow-up turns are byte-identical
+between residencies (`tools/smoke/overlay_ab.py`). The follow-up turn reuses the prefix and opens
+no window. At `--max-concurrency 2` two text requests complete alongside the image request.
+
+Text throughput without images is unchanged between residencies (7.7k-token prefill / 320-token
+decode, three runs each in one boot order): `int8` 852–862 vs 846–852 tok/s prefill and 53–62 vs
+55–60 tok/s decode, `rk8v4` 845–870 vs 857–875 tok/s prefill and 55–57 vs 57–58 tok/s decode.
+
+Per-image cost of a window (rk8v4, `--max-concurrency 1`): the 1920×1080 image reaches its first
+token in 3.55 s under overlay against 3.47 s resident (window 477 ms: 192 MiB evicted in 4 ms,
+restored in 11 ms, 282 MiB of tower streamed behind compute); the 4000×3000 image reaches it in
+22.8 s against 23.0 s (window 6.65 s, 784 MiB evicted in 10 ms, restored in 49 ms). Boot-to-boot
+prefill throughput on the rented card varies by about ±15 % (GPU clocks), so residencies are only
+compared within one run.
