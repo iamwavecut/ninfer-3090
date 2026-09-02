@@ -923,18 +923,13 @@ void TextContext::gdn_mix(const GdnLayerW& w, Tensor& x, int gidx, Phase ph) {
                 query_output, key_output, value_output, gate_output, ph, work_, s);
         }
     } else {
-        const auto conv = workspace_recipe::gdn_prefill_conv<TextConfig>(work_, T);
-        Tensor qkv      = conv.projected;
+        Tensor qkv = workspace_recipe::gdn_prefill_conv<TextConfig>(work_, T);
         Variant::gdn_input_projection(h, *w.projection, qkv, z, ph, work_, s);
-        Tensor qkv_c = conv.convolved;
         Tensor conv_state_in =
             state_.conv_slot(static_cast<std::uint32_t>(gidx), linear_state_source_slot_);
         Tensor conv_state_out =
             state_.conv_slot(static_cast<std::uint32_t>(gidx), linear_state_destination_slot_);
-        ops::causal_conv1d_silu(qkv, *w.conv1d, conv_state_in, conv_state_out, qkv_c, s);
-        ops::extract_bf16_columns(qkv_c, 0, qc, s);
-        ops::extract_bf16_columns(qkv_c, kCfg.key_dim, kc, s);
-        ops::extract_bf16_columns(qkv_c, 2 * kCfg.key_dim, vc, s);
+        ops::causal_conv1d_silu_split(qkv, *w.conv1d, conv_state_in, conv_state_out, qc, kc, vc, s);
     }
 
     Tensor q_recurrent = qc.view({kCfg.gdn_k_dim, kCfg.gdn_k_heads, T});

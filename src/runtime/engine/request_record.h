@@ -158,6 +158,7 @@ struct RequestRecord {
     std::optional<Clock::time_point> first_token;
     bool queue_wait_recorded = false;
     std::optional<GenerationBudget> budget;
+    std::optional<BeginSummary> admitted_begin;
     std::optional<BeginSummary> begin;
     std::vector<TokenId> generated;
     std::string content;
@@ -181,6 +182,7 @@ struct RequestRecord {
 
     std::mutex mutex;
     std::condition_variable cv;
+    std::optional<GenerationStart> stream_start;
     std::vector<OutputDelta> events;
     GenerationResult result;
     std::exception_ptr error;

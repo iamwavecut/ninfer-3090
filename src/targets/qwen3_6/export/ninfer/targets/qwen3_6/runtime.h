@@ -646,6 +646,8 @@ public:
     // capabilities, model state and one immutable pending transaction at a time.
     [[nodiscard]] RequestBasePlan<Variant>
     plan_request(const PreparedPrompt& prompt, const runtime::ResolvedExecutionOptions& options);
+    [[nodiscard]] std::vector<float> causal_score(PreparedPrompt&& prompt,
+                                                  std::uint32_t first_target);
     [[nodiscard]] std::optional<AdmissionCandidate<Variant>>
     inspect_admission(const PreparedPrompt& prompt, const RequestBasePlan<Variant>& base,
                       runtime::LaneId destination, const ContinuationHandle<Variant>* source,

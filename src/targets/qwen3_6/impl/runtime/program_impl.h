@@ -4,9 +4,12 @@
 
 #include "targets/qwen3_6/impl/runtime/schedule.h"
 #include "ninfer/ops/gdn_replay.h"
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/prepare_ragged_prefix.h"
+#include "ninfer/ops/sampling.h"
 #include "ninfer/ops/scatter.h"
 #include "ninfer/ops/speculative_round.h"
+#include "ninfer/ops/target_logprobs.h"
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -725,13 +728,16 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       kv_rotate_k(plan.kv_rotate_k), kv_rotate_v(plan.kv_rotate_v),
       proposal_head(plan.proposal_head),
       vision_enabled(plan.features.vision), use_cuda_graph(plan.use_cuda_graph),
-      kv_payload_bytes(plan.persistent.kv_payload_bytes),
+      causal_scoring(plan.causal_scoring), kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
       persistent(plan.persistent.bytes), workspace_storage(plan.workspace.capacity),
       work(DeviceSpan{workspace_storage.base(), plan.workspace.general_capacity}),
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
       shared_prefix_states(shared_prefix_capacity), shared_prefix_slots(shared_prefix_capacity),
       round_host(sizeof(TokenId)),
+      score_logprobs_host(plan.causal_scoring ? std::make_optional<PinnedHostBuffer>(
+                                                    kCausalScoreTile * sizeof(float))
+                                              : std::nullopt),
       ordinary_host(
           plan.speculative_backend == SpeculativeBackend::None
               ? std::make_optional<PinnedHostBuffer>(sizeof(qwen3_6::OrdinaryDecodeIngress) +
@@ -767,6 +773,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
     if (workspace_plan.general_capacity == 0 ||
         workspace_plan.vision.has_value() != vision_enabled ||
+        causal_scoring != plan.persistent.score_hidden.has_value() ||
+        causal_scoring != (workspace_plan.causal_score != 0) ||
         (workspace_plan.vision &&
          workspace_plan.vision->general_capacity_bytes != workspace_plan.general_capacity)) {
         throw std::invalid_argument("Qwen3.6 workspace plan does not match startup features");
@@ -891,7 +899,10 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     if (io.dflash_decode.has_value() != (speculative_backend == SpeculativeBackend::DFlash)) {
         throw std::logic_error("DFlash decode frame does not match the sequence plan");
     }
-    prefill_hidden  = plan.persistent.prefill_hidden.bind(backing);
+    prefill_hidden = plan.persistent.prefill_hidden.bind(backing);
+    if (plan.persistent.score_hidden) {
+        score_hidden = plan.persistent.score_hidden->bind(backing);
+    }
     token_counts    = plan.persistent.token_counts.bind(backing);
     sampling_config = plan.persistent.sampling_config.bind(backing);
     active_continuations.fill(continuation_capacity);
@@ -962,6 +973,161 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
 ProgramImplCore::~ProgramImplCore() noexcept {
     if (device.transfer_stream != nullptr) { (void)cudaStreamSynchronize(device.transfer_stream); }
     if (device.stream != nullptr) { (void)cudaStreamSynchronize(device.stream); }
+}
+
+std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
+                                                 std::uint32_t first_target) {
+    if (!causal_scoring || !score_hidden || !score_logprobs_host ||
+        workspace_plan.causal_score == 0) {
+        throw std::logic_error("Program was not constructed for causal scoring");
+    }
+    if (speculative_backend != SpeculativeBackend::None || vision_enabled || use_cuda_graph ||
+        context_cache.enabled) {
+        throw std::logic_error("causal scoring Program has generation-only startup features");
+    }
+    const std::size_t token_count_size = prompt.token_ids.size();
+    if (token_count_size < 2 || token_count_size > capacity) {
+        throw std::invalid_argument("causal score token count must be in [2,capacity]");
+    }
+    if (first_target == 0 || first_target >= token_count_size) {
+        throw std::invalid_argument("causal score first_target is outside the token window");
+    }
+    if (prompt.has_media()) {
+        throw std::invalid_argument("causal scoring accepts text tokens only");
+    }
+
+    const auto token_count                     = static_cast<std::uint32_t>(token_count_size);
+    const std::uint32_t predictor_count        = token_count - 1U;
+    const std::uint32_t scored_predictor_begin = first_target - 1U;
+    const std::uint32_t entitlement            = kv_pages_for_frontier(predictor_count);
+    if (entitlement == 0) { throw std::logic_error("causal score has no KV entitlement"); }
+
+    std::optional<StateImageHandle> state;
+    std::optional<KVAddressSpaceHandle> address;
+    const auto cleanup = [&] {
+        bool released = true;
+        if (address) {
+            if (text_kv_addresses->active(*address)) { text_kv_addresses->deactivate(*address); }
+            released = text_kv_addresses->release(*address) && released;
+            address.reset();
+        }
+        if (state) {
+            released = state_store->release(*state) && released;
+            state.reset();
+        }
+        if (!released) { throw std::logic_error("causal score resources could not be released"); }
+    };
+
+    std::vector<float> output;
+    output.reserve(token_count_size - first_target);
+    std::vector<TokenId> staged_targets;
+    staged_targets.reserve(kCausalScoreTile);
+    std::uint32_t staged_columns = 0;
+
+    try {
+        state = state_store->reserve_reset(device.stream);
+        if (!state) { throw std::bad_alloc(); }
+        address = text_kv_addresses->create_active(entitlement, 0);
+        if (!address) { throw std::bad_alloc(); }
+        if (text_kv_addresses->bound_row(*address) != 0) {
+            throw std::logic_error("causal score did not bind the unique Main KV row");
+        }
+        text_kv_addresses->materialize_to_tokens(*address, predictor_count, device.stream);
+
+        const std::int32_t state_slot = state_store->physical_slot(*state);
+        const auto flush              = [&] {
+            if (staged_columns == 0) { return; }
+            if (staged_columns != staged_targets.size() || staged_columns > kCausalScoreTile) {
+                throw std::logic_error("causal score staging has an invalid shape");
+            }
+            work.reset();
+            mark_workspace_usage(workspace_plan.causal_score);
+            const auto columns = static_cast<std::int32_t>(staged_columns);
+            Tensor logits      = work.alloc(DType::BF16, {TextConfig::output_rows, columns});
+            Tensor target_ids  = work.alloc(DType::I32, {columns});
+            Tensor logprobs    = work.alloc(DType::FP32, {columns});
+            Tensor hidden      = score_hidden->slice(1, 0, columns);
+            ops::linear(hidden, model.output_head, logits, device.stream);
+            CUDA_CHECK(cudaMemcpyAsync(target_ids.data, staged_targets.data(), target_ids.bytes(),
+                                       cudaMemcpyHostToDevice, device.stream));
+            ops::target_logprobs(logits, target_ids, TextConfig::token_domain, logprobs,
+                                 device.stream);
+            CUDA_CHECK(cudaMemcpyAsync(score_logprobs_host->data(), logprobs.data, logprobs.bytes(),
+                                       cudaMemcpyDeviceToHost, device.stream));
+            device.synchronize();
+            const auto* host = static_cast<const float*>(score_logprobs_host->data());
+            output.insert(output.end(), host, host + staged_columns);
+            staged_targets.clear();
+            staged_columns = 0;
+            work.reset();
+        };
+
+        std::uint32_t cursor = 0;
+        while (cursor < predictor_count) {
+            const std::uint32_t nominal = std::min(prefill_chunk, predictor_count - cursor);
+            schedule::PrefillContext schedule_state{
+                {device, model, work, state_images->linear(), nullptr, io, prefill_hidden,
+                 prefill_chunk, proposal_head},
+                decoder->text_kv.execution_view(text_kv_addresses->execution_row(*address)),
+                {},
+                decoder->text_kv,
+                nullptr,
+                nullptr,
+                cursor,
+                nullptr,
+                nullptr,
+                state_slot,
+                state_slot,
+                0,
+                nullptr};
+            mark_workspace_usage(workspace_plan.text_prefill);
+            const schedule::PrefillChunkResult result = schedule::prefill_text_chunk(
+                schedule_state, std::span<const TokenId>(prompt.token_ids), nominal, std::nullopt,
+                false);
+            if (result.finalized || result.processed_tokens == 0 ||
+                result.processed_tokens > nominal) {
+                throw std::logic_error("causal score Prefill made invalid progress");
+            }
+            const std::uint32_t chunk_begin = cursor;
+            cursor += result.processed_tokens;
+            text_kv_addresses->commit_frontier(*address, cursor);
+
+            std::uint32_t selected = std::max(chunk_begin, scored_predictor_begin);
+            while (selected < cursor) {
+                const std::uint32_t available = cursor - selected;
+                const std::uint32_t room      = kCausalScoreTile - staged_columns;
+                const std::uint32_t count     = std::min(available, room);
+                Tensor source =
+                    prefill_hidden.slice(1, static_cast<std::int32_t>(selected - chunk_begin),
+                                         static_cast<std::int32_t>(count));
+                Tensor destination = score_hidden->slice(
+                    1, static_cast<std::int32_t>(staged_columns), static_cast<std::int32_t>(count));
+                CUDA_CHECK(cudaMemcpyAsync(destination.data, source.data, source.bytes(),
+                                           cudaMemcpyDeviceToDevice, device.stream));
+                for (std::uint32_t column = 0; column < count; ++column) {
+                    staged_targets.push_back(prompt.token_ids[selected + column + 1U]);
+                }
+                selected += count;
+                staged_columns += count;
+                if (staged_columns == kCausalScoreTile) { flush(); }
+            }
+        }
+        flush();
+        if (output.size() != token_count_size - first_target) {
+            throw std::logic_error("causal score produced the wrong number of logprobs");
+        }
+        cleanup();
+        return output;
+    } catch (...) {
+        try {
+            device.synchronize();
+        } catch (...) {}
+        work.reset();
+        try {
+            cleanup();
+        } catch (...) {}
+        throw;
+    }
 }
 
 void ProgramImplCore::start_context_transfer_timer(runtime::ContextResourceClass resource) {
@@ -7776,6 +7942,28 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
         lanes[row] = lane;
     }
 
+    const bool count_forced_tokens = std::any_of(
+        lanes.begin(), lanes.begin() + static_cast<std::ptrdiff_t>(members.size()),
+        [&](std::uint32_t lane) { return requests[lane].sampling_host.token_counts != nullptr; });
+    if (count_forced_tokens) {
+        work.reset();
+        Tensor forced_ids =
+            work.alloc(DType::I32, {checked_i32(static_cast<std::uint32_t>(row_major_tokens.size()),
+                                                "forced-token batch exceeds int32")});
+        CUDA_CHECK(cudaMemcpyAsync(forced_ids.data, row_major_tokens.data(), forced_ids.bytes(),
+                                   cudaMemcpyHostToDevice, device.stream));
+        for (std::size_t row = 0; row < members.size(); ++row) {
+            const std::uint32_t lane = lanes[row];
+            if (requests[lane].sampling_host.token_counts == nullptr) { continue; }
+            Tensor ids    = forced_ids.slice(0, static_cast<std::int32_t>(row * row_stride),
+                                             static_cast<std::int32_t>(row_stride));
+            Tensor counts = token_counts.slice(1, static_cast<std::int32_t>(lane), 1)
+                                .view({TextConfig::token_domain});
+            ops::increment_token_counts(ids, counts, device.stream);
+        }
+        work.reset();
+    }
+
     try {
         for (std::size_t row = 0; row < members.size(); ++row) {
             timing.resume_submit();
@@ -9848,7 +10036,6 @@ void ProgramImplCore::install_sampling(SequenceState& sequence, RequestControl& 
                                        const ops::SamplingConfig& config) {
     Tensor counts = token_counts.slice(1, static_cast<std::int32_t>(sequence.lane), 1)
                         .view({TextConfig::token_domain});
-    CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), device.stream));
     request.sampling_host     = config;
     request.speculative_stats = SpeculativeStats{
         .backend               = speculative_backend,
@@ -9858,6 +10045,7 @@ void ProgramImplCore::install_sampling(SequenceState& sequence, RequestControl& 
     };
     const bool penalties = request.sampling_host.presence_penalty != 0.0F ||
                            request.sampling_host.frequency_penalty != 0.0F;
+    if (penalties) { CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), device.stream)); }
     request.sampling_host.token_counts =
         penalties ? static_cast<std::int32_t*>(counts.data) : nullptr;
     Tensor config_lane = sampling_config.slice(1, static_cast<std::int32_t>(sequence.lane), 1);

@@ -202,6 +202,12 @@ Program<Variant>::plan_request(const PreparedPrompt& prompt,
 }
 
 template <>
+std::vector<float> Program<Variant>::causal_score(PreparedPrompt&& prompt,
+                                                  std::uint32_t first_target) {
+    return impl_->causal_score(PreparedPromptAccess::take(std::move(prompt)), first_target);
+}
+
+template <>
 std::optional<AdmissionCandidate<Variant>> Program<Variant>::inspect_admission(
     const PreparedPrompt& prompt, const RequestBasePlan<Variant>& base, runtime::LaneId destination,
     const ContinuationHandle<Variant>* source, const SharedPrefixHandle<Variant>* shared_source,

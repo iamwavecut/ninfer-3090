@@ -302,8 +302,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.sampling_overrides.top_p =
                 parse_float_in(require_value("--top-p"), "top-p", 0.0f, 1.0f);
         } else if (arg == "--top-k") {
-            options.sampling_overrides.top_k =
-                parse_nonnegative_int(require_value("--top-k"), "top-k");
+            const int top_k = parse_nonnegative_int(require_value("--top-k"), "top-k");
+            if (top_k > 20) { throw std::invalid_argument("top-k must be in [0,20]"); }
+            options.sampling_overrides.top_k = top_k;
         } else if (arg == "--min-p") {
             options.sampling_overrides.min_p =
                 parse_float_in(require_value("--min-p"), "min-p", 0.0f, 1.0f);

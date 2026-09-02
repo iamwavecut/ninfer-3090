@@ -515,6 +515,8 @@ public:
 
     [[nodiscard]] RequestBasePlan plan_request(const PreparedPromptData& prompt,
                                                const runtime::ResolvedExecutionOptions& options);
+    [[nodiscard]] std::vector<float> causal_score(PreparedPromptData&& prompt,
+                                                  std::uint32_t first_target);
     [[nodiscard]] std::optional<AdmissionCandidate> inspect_admission(
         const PreparedPromptData& prompt, const RequestBasePlan& base, runtime::LaneId destination,
         const ContinuationHandle* source, const SharedPrefixHandle* shared_source,
@@ -603,6 +605,7 @@ public:
     const ProposalHead proposal_head;
     const bool vision_enabled;
     const bool use_cuda_graph;
+    const bool causal_scoring;
     const std::size_t kv_payload_bytes;
     const std::size_t graph_allowance_bytes;
     const WorkspacePlan workspace_plan;
@@ -627,6 +630,7 @@ public:
     std::optional<DFlashPersistentState> dflash;
     qwen3_6::RoundState io;
     Tensor prefill_hidden;
+    std::optional<Tensor> score_hidden;
     Tensor sampling_config;
     Tensor token_counts;
 
@@ -643,6 +647,7 @@ public:
     DecodeGraphFamily dflash_graphs;
 
     PinnedHostBuffer round_host;
+    std::optional<PinnedHostBuffer> score_logprobs_host;
     TokenId* host_tokens = nullptr;
     std::optional<PinnedHostBuffer> ordinary_host;
     qwen3_6::OrdinaryDecodeIngress* ordinary_host_ingress = nullptr;

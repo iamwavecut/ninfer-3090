@@ -33,6 +33,11 @@ enum class KvCacheStorage : std::uint8_t {
     Fp8E4M3Row256,
 };
 
+enum class EnginePurpose : std::uint8_t {
+    Generation,
+    CausalScoring,
+};
+
 enum class KvCapacityMode : std::uint8_t {
     Explicit,
     Automatic,
@@ -104,8 +109,9 @@ struct ContextCostOptions {
 
 struct EngineOptions {
     std::filesystem::path artifact_path;
+    EnginePurpose purpose              = EnginePurpose::Generation;
     int device                         = 0;
-    std::uint32_t max_context          = 2048; // Exact logical ceiling of each request.
+    std::uint32_t max_context          = 2048; // Logical ceiling of one request or score window.
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(2048);
     std::uint32_t max_concurrency      = 1;
     std::uint32_t max_pending_requests = 16;
@@ -164,7 +170,7 @@ struct SamplingOverrides {
 // Complete parameters after Engine resolution. Target runtimes consume only this type.
 struct ResolvedSamplingParameters {
     float temperature       = 0.0F;
-    std::int32_t top_k      = 0;
+    std::int32_t top_k      = 20;
     float top_p             = 1.0F;
     float min_p             = 0.0F;
     float presence_penalty  = 0.0F;
@@ -207,6 +213,9 @@ struct ExecutionOptions {
 struct OutputOptions {
     bool raw                     = false;
     bool preserve_special_tokens = false;
+    // Presentation constraint supplied by the protocol adapter. It bounds only Qwen's emitted
+    // function-name grammar; it does not require the name to match a currently declared tool.
+    std::uint32_t tool_name_max_length = 128;
 };
 
 struct RequestOptions {
@@ -220,15 +229,27 @@ enum class MediaKind : std::uint8_t {
     Video,
 };
 
+enum class ImageResizePolicy : std::uint8_t {
+    Downsize,
+    RejectOversized,
+};
+
 struct OwnedMedia {
     MediaKind kind = MediaKind::Image;
     std::vector<std::uint8_t> bytes;
     std::string media_type;
     std::string source_name;
+    ImageResizePolicy image_resize_policy = ImageResizePolicy::Downsize;
 };
 
 struct ToolCall {
     std::string id;
+    std::string name;
+    std::string arguments_json;
+};
+
+// Model-origin structured output. Protocol adapters own any wire-level call identifier.
+struct GeneratedToolCall {
     std::string name;
     std::string arguments_json;
 };
@@ -292,9 +313,14 @@ struct PromptCapabilities {
     ReasoningEffortCapabilities reasoning_effort;
 };
 
+enum class PromptContinuationMode : std::uint8_t {
+    NewAssistantTurn,
+    ContinueFinalAssistant,
+};
+
 struct PromptOptions {
-    bool add_generation_prompt = true;
-    bool enable_thinking       = true;
+    PromptContinuationMode continuation = PromptContinuationMode::NewAssistantTurn;
+    bool enable_thinking                = true;
     std::optional<ReasoningEffort> reasoning_effort;
     bool preserve_thinking = false;
     bool add_vision_id     = false;
@@ -314,6 +340,7 @@ enum class PromptCacheMarkerKind : std::uint8_t {
 
 enum class PromptCacheMarkerLocation : std::uint8_t {
     MessageBoundary,
+    MessagePartBoundary,
     LeadingInstructionBoundary,
     ToolBoundary,
 };
@@ -325,6 +352,9 @@ struct PromptCacheMarker {
     // Byte count within the untrimmed leading System/Developer message.
     std::uint32_t leading_instruction_bytes = 0;
     std::uint32_t after_tool_count          = 0;
+    // For MessagePartBoundary, after_message_count identifies the containing message using a
+    // one-based count and this value identifies the number of serialized parts within it.
+    std::uint32_t after_message_part_count = 0;
 
     [[nodiscard]] friend constexpr bool operator==(PromptCacheMarker,
                                                    PromptCacheMarker) noexcept = default;
@@ -349,6 +379,7 @@ enum class RequestErrorKind : std::uint8_t {
     ContextLengthExceeded,
     ThinkingBudgetCapacityInsufficient,
     MediaBudgetExceeded,
+    InvalidMedia,
     Overloaded,
     QueueTimeout,
     Cancelled,
@@ -419,10 +450,19 @@ struct OutputDelta {
     std::string text;
 };
 
+// Exact prompt accounting selected at admission. Streaming consumers receive this once before any
+// OutputDelta, after the prefix choice and materialization reservation are committed and before
+// transfer/prefill execution.
+struct GenerationStart {
+    PromptSummary prompt;
+    std::uint32_t reused_prompt_tokens = 0;
+};
+
 class OutputSink {
 public:
-    virtual ~OutputSink()                   = default;
-    virtual void publish(OutputDelta delta) = 0;
+    virtual ~OutputSink()                     = default;
+    virtual void start(GenerationStart start) = 0;
+    virtual void publish(OutputDelta delta)   = 0;
 };
 
 enum class OutputConsumerMode : std::uint8_t {
@@ -570,8 +610,10 @@ struct GenerationResult {
     std::vector<TokenId> generated_token_ids;
     std::string content;
     std::string reasoning;
-    std::uint32_t reasoning_tokens     = 0;
-    FinishReason finish_reason         = FinishReason::None;
+    std::vector<GeneratedToolCall> tool_calls;
+    std::uint32_t reasoning_tokens = 0;
+    FinishReason finish_reason     = FinishReason::None;
+    std::optional<std::string> matched_stop_string;
     std::uint32_t reused_prompt_tokens = 0;
     PrefixReusePath prefix_reuse_path  = PrefixReusePath::Root;
     MaterializationDiagnostics materialization;
