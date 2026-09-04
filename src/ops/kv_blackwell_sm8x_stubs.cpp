@@ -19,32 +19,11 @@ namespace {
 
 
 
-void kv_cache_append_k8v4_launch(const Tensor&, const Tensor&, const Tensor&, PagedKVLayerView,
-                                 cudaStream_t) {
-    reject_blackwell_kv();
-}
-
-void kv_cache_append_k8v4_batch_launch(const Tensor&, const Tensor&, const Tensor&, const Tensor&,
-                                       const Tensor&, PagedKVBatchLayerView, cudaStream_t) {
-    reject_blackwell_kv();
-}
 
 
 
-void causal_attention_small_t_k8v4_launch(const Tensor&, const Tensor&, const Tensor&,
-                                          const Tensor&, const Tensor&, const Tensor&, float,
-                                          PagedKVBatchLayerView, CausalAttentionExecutionEnvelope,
-                                          std::int32_t, std::int32_t, Tensor&, Tensor&, Tensor&,
-                                          Tensor&, cudaStream_t) {
-    reject_blackwell_kv();
-}
 
-void causal_attention_cached_small_t_k8v4_launch(const Tensor&, const Tensor&, float,
-                                                 const PagedKVLayerView&,
-                                                 CausalAttentionExecutionEnvelope, Tensor&,
-                                                 Tensor&, Tensor&, Tensor&, cudaStream_t) {
-    reject_blackwell_kv();
-}
+
 
 void causal_attention_prompt_nvfp4_launch(const Tensor&, const Tensor&, const Tensor&,
                                           const Tensor&, const Tensor&, const Tensor&, float,

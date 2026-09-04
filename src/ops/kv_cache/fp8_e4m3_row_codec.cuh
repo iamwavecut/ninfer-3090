@@ -3,8 +3,10 @@
 // E4M3FN row-scaled D256 KV-cache codec shared by standalone append and causal Attention.
 // Persistent scales cross one FP16 represented-value boundary before codes are formed.
 
+#include "ops/common/memory.cuh"
 #include "ops/kernel/paged_kv_address.cuh"
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
@@ -76,6 +78,44 @@ __device__ __forceinline__ __half2 kv_cache_fp8_code2_to_half2(std::uint16_t sto
 __device__ __forceinline__ __half2 kv_cache_fp8_dequant_code2_to_half2(std::uint16_t storage,
                                                                        __half scale) {
     return __hmul2(kv_cache_fp8_code2_to_half2(storage), __halves2half2(scale, scale));
+}
+
+// Dequantizes 8 contiguous E4M3 codes (16 bytes) to FP16, for PV MMA operands on hardware with
+// no FP8 tensor-core path (sm_86/sm_89): the row's scale is a single value shared by every code.
+__device__ __forceinline__ int4 kv_cache_fp8_dequant_f16x8(const std::uint8_t* codes,
+                                                           __half scale) {
+    const int2 raw         = load_vec<int2>(codes);
+    const std::uint16_t* c = reinterpret_cast<const std::uint16_t*>(&raw);
+    unsigned packed[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const __half2 value2 = kv_cache_fp8_dequant_code2_to_half2(c[i], scale);
+        packed[i]            = *reinterpret_cast<const unsigned*>(&value2);
+    }
+    return make_int4(static_cast<int>(packed[0]), static_cast<int>(packed[1]),
+                     static_cast<int>(packed[2]), static_cast<int>(packed[3]));
+}
+
+// Dequantizes 8 contiguous E4M3 codes (16 bytes) to BF16, for QK MMA operands on hardware with
+// no FP8 tensor-core path: sm_86/sm_89 must run QK on ordinary BF16 Tensor Cores instead of the
+// Blackwell-only mma.sync...kind::f8f6f4, so K needs a real (not just reinterpreted) wide copy.
+__device__ __forceinline__ int4 kv_cache_fp8_dequant_bf16x8(const std::uint8_t* codes,
+                                                             __half scale) {
+    const int2 raw         = load_vec<int2>(codes);
+    const std::uint16_t* c = reinterpret_cast<const std::uint16_t*>(&raw);
+    const float scale_f    = __half2float(scale);
+    unsigned packed[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        __nv_fp8x2_e4m3 value;
+        value.__x                   = c[i];
+        const float2 decoded        = static_cast<float2>(value);
+        const __nv_bfloat162 value2 =
+            __floats2bfloat162_rn(decoded.x * scale_f, decoded.y * scale_f);
+        packed[i] = *reinterpret_cast<const unsigned*>(&value2);
+    }
+    return make_int4(static_cast<int>(packed[0]), static_cast<int>(packed[1]),
+                     static_cast<int>(packed[2]), static_cast<int>(packed[3]));
 }
 
 } // namespace ninfer::ops

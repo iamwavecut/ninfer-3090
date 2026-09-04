@@ -23,39 +23,6 @@
 
 namespace ninfer::ops {
 
-__device__ __forceinline__ int4 causal_small_t_fp8_dequant_bf16x8(const std::uint8_t* codes,
-                                                                   __half scale) {
-    const int2 raw          = load_vec<int2>(codes);
-    const std::uint16_t* c  = reinterpret_cast<const std::uint16_t*>(&raw);
-    const float scale_f     = __half2float(scale);
-    unsigned packed[4];
-#pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        __nv_fp8x2_e4m3 value;
-        value.__x                  = c[i];
-        const float2 decoded       = static_cast<float2>(value);
-        const __nv_bfloat162 value2 =
-            __floats2bfloat162_rn(decoded.x * scale_f, decoded.y * scale_f);
-        packed[i] = *reinterpret_cast<const unsigned*>(&value2);
-    }
-    return make_int4(static_cast<int>(packed[0]), static_cast<int>(packed[1]),
-                     static_cast<int>(packed[2]), static_cast<int>(packed[3]));
-}
-
-__device__ __forceinline__ int4 causal_small_t_fp8_dequant_f16x8(const std::uint8_t* codes,
-                                                                 __half scale) {
-    const int2 raw         = load_vec<int2>(codes);
-    const std::uint16_t* c = reinterpret_cast<const std::uint16_t*>(&raw);
-    unsigned packed[4];
-#pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        const __half2 value2 = kv_cache_fp8_dequant_code2_to_half2(c[i], scale);
-        packed[i]            = *reinterpret_cast<const unsigned*>(&value2);
-    }
-    return make_int4(static_cast<int>(packed[0]), static_cast<int>(packed[1]),
-                     static_cast<int>(packed[2]), static_cast<int>(packed[3]));
-}
-
 template <typename Geometry, int TokenTile, int WarpsPerCta, int MinBlocksPerSm, int KeyBlock,
           bool DynamicArena, bool MultiBatch, bool Masked, typename CacheInput>
 __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
@@ -365,7 +332,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
             const int dc         = chunk - key_l * (D / 8);
             const int d          = dc * 8;
             __nv_bfloat16* k_dst = &k_b16[key_l * D + causal_small_t_tc_swz(key_l, d)];
-            store_vec(k_dst, causal_small_t_fp8_dequant_bf16x8(&k_fp8[key_l * D + d],
+            store_vec(k_dst, kv_cache_fp8_dequant_bf16x8(&k_fp8[key_l * D + d],
                                                                k_scale_s[key_l]));
         }
     };
@@ -491,7 +458,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                 const int key   = k0 + key_l;
                 __half* dst     = &v_f16[key_l * D + causal_small_t_tc_swz(key_l, d)];
                 if (key >= split_start && key < split_end) {
-                    store_vec(dst, causal_small_t_fp8_dequant_f16x8(&v_fp8[key_l * D + d],
+                    store_vec(dst, kv_cache_fp8_dequant_f16x8(&v_fp8[key_l * D + d],
                                                                     v_scale_s[key_l]));
                 } else {
                     store_vec(dst, make_int4(0, 0, 0, 0));
