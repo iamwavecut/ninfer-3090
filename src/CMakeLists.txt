@@ -295,9 +295,12 @@ if(CMAKE_CUDA_ARCHITECTURES MATCHES "^(86|89)$")
   # and rejects the FP8 KV cache at startup.
   list(FILTER ninfer_ops_sources EXCLUDE REGEX "fp8/.+_a8\\.cu$")
   list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/(small_t|prompt)_fp8\\.cu$")
-  # The NVFP4 and K8V4 KV kernels share that encoding; the storages are rejected at startup.
-  list(FILTER ninfer_ops_sources EXCLUDE REGEX "kv_cache/append/(nvfp4|k8v4)_launch\\.cu$")
-  list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/(small_t|prompt)_(nvfp4|k8v4)\\.cu$")
+  # NVFP4 decode and append run on SM8X: the e2m1 codec encodes in software through
+  # __nv_fp4x2_e2m1 instead of Blackwell's cvt.rn.satfinite.e2m1x2. K8V4 still needs the FP8
+  # mma.sync kind::f8f6f4 key path, and the NVFP4 prompt kernel is warp-specialized (setmaxnreg).
+  list(FILTER ninfer_ops_sources EXCLUDE REGEX "kv_cache/append/k8v4_launch\\.cu$")
+  list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/(small_t|prompt)_k8v4\\.cu$")
+  list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/prompt_nvfp4\\.cu$")
   set_property(TARGET ninfer_ops PROPERTY SOURCES ${ninfer_ops_sources})
   target_sources(ninfer_ops PRIVATE ops/nvfp4_sm86_stubs.cpp ops/fp8_sm8x_stubs.cpp
     ops/kv_blackwell_sm8x_stubs.cpp)
