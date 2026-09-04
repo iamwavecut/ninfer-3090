@@ -60,7 +60,7 @@ if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
   add_library(ninfer_nvfp4_non_rdc STATIC
     ops/linear/nvfp4/nvfp4_w4a4_tma.cu
     ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_w4a4_tma.cu
-    ops/softmax_attention/dense/causal_cache/prompt_nvfp4_non_rdc.cu)
+)
   ninfer_internal_includes(ninfer_nvfp4_non_rdc)
   set_target_properties(ninfer_nvfp4_non_rdc PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
@@ -294,13 +294,8 @@ if(CMAKE_CUDA_ARCHITECTURES MATCHES "^(86|89)$")
   # mma .kind::f8f6f4 encoding; SM8X serves FP8 weights through the A16 routes
   # and rejects the FP8 KV cache at startup.
   list(FILTER ninfer_ops_sources EXCLUDE REGEX "fp8/.+_a8\\.cu$")
-  # NVFP4 decode and append run on SM8X: the e2m1 codec encodes in software through
-  # __nv_fp4x2_e2m1 instead of Blackwell's cvt.rn.satfinite.e2m1x2. K8V4 still needs the FP8
-  # mma.sync kind::f8f6f4 key path, and the NVFP4 prompt kernel is warp-specialized (setmaxnreg).
-  list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/prompt_nvfp4\\.cu$")
   set_property(TARGET ninfer_ops PROPERTY SOURCES ${ninfer_ops_sources})
-  target_sources(ninfer_ops PRIVATE ops/nvfp4_sm86_stubs.cpp ops/fp8_sm8x_stubs.cpp
-    ops/kv_blackwell_sm8x_stubs.cpp)
+  target_sources(ninfer_ops PRIVATE ops/nvfp4_sm86_stubs.cpp ops/fp8_sm8x_stubs.cpp)
   target_compile_definitions(ninfer_ops PUBLIC NINFER_SM8X_COMPAT=1)
 endif()
 ninfer_internal_includes(ninfer_ops)

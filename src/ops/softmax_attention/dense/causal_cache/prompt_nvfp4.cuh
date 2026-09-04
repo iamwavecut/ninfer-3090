@@ -1,11 +1,22 @@
 #pragma once
 
-// Group-16 NVFP4 causal prompt kernel with an entirely on-chip decode pipeline. Twelve producer
-// warps expand paged K/V directly into independent FP16 shared-memory tiles while four
-// register-specialized consumer warps execute FP16/FP32 QK, online Softmax, and FP16/FP32 PV.
-// No complete K/V/P tensor is materialized outside the CTA.
+// NVFP4 causal prompt kernel. Both K and V are group-16 packed NVFP4, each widened to a wide
+// type before any MMA, since sm_86/sm_89 have no FP4 tensor-core path at all: K to BF16 for QK,
+// V to FP16 for PV (V's dequant-to-FP16 side was already portable -- NVFP4's only Blackwell
+// dependency was its value-only e2m1 encode, already fixed in nvfp4_codec.cuh; K needs the same
+// treatment now for QK). Q is never quantized (only the cache is NVFP4-coded) but still gets the
+// D256 Hadamard rotation, matching cached K's permanently-rotated storage; V is ALSO rotated, so
+// the normalized result receives the matching FP32 inverse rotation before it's written out (same
+// contract as this fork's K8V4 prompt kernel). This kernel never writes the cache itself
+// (kv_cache_append_batch_launch does that separately before it runs), so there is no
+// quantize-on-write path to preserve here.
+//
+// This replaces the upstream warp-specialized NVFP4 prompt kernel (setmaxnreg.{dec,inc}.sync.
+// aligned dynamic producer/consumer register reallocation), a genuine Hopper+ hardware feature
+// with no sm_86/sm_89 equivalent -- unlike the codec, that kernel wasn't portable by swapping one
+// instruction, so this is a fresh kernel following this fork's FP8/K8V4 prompt kernels' shape
+// instead.
 
-#include "ops/common/mbarrier.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
 #include "ops/kv_cache/nvfp4_group16_codec.cuh"
 #include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
@@ -18,75 +29,43 @@
 
 namespace ninfer::ops {
 
-inline constexpr int kCausalPromptNvfp4Br              = 64;
-inline constexpr int kCausalPromptNvfp4Bc              = 64;
-inline constexpr int kCausalPromptNvfp4ProducerWarps   = 12;
-inline constexpr int kCausalPromptNvfp4ConsumerWarps   = 4;
-inline constexpr int kCausalPromptNvfp4ProducerThreads = kCausalPromptNvfp4ProducerWarps * 32;
-inline constexpr int kCausalPromptNvfp4ConsumerThreads = kCausalPromptNvfp4ConsumerWarps * 32;
-inline constexpr int kCausalPromptNvfp4Threads =
-    kCausalPromptNvfp4ProducerThreads + kCausalPromptNvfp4ConsumerThreads;
-inline constexpr int kCausalPromptNvfp4TileBytes =
+inline constexpr int kCausalPromptNvfp4Warps         = 16;
+inline constexpr int kCausalPromptNvfp4Threads       = kCausalPromptNvfp4Warps * 32;
+// A real dequantized BF16 copy of K beside its raw NVFP4 staging buffer, on top of a real
+// (unquantized) BF16 Q buffer, needs more shared memory per key than this fork's INT8/BF16 prompt
+// kernels budget for at their usual Br=Bc=64 tile size (same ~99KiB-per-block constraint as
+// prompt_fp8.cuh/prompt_k8v4.cuh; see their comments). Br=Bc=32 fits comfortably (~60KiB).
+inline constexpr int kCausalPromptNvfp4Br            = 32;
+inline constexpr int kCausalPromptNvfp4Bc            = 32;
+inline constexpr int kCausalPromptNvfp4RowTiles      = kCausalPromptNvfp4Br / 16;
+inline constexpr int kCausalPromptNvfp4ProducerWarps = 2 * kCausalPromptNvfp4RowTiles;
+inline constexpr int kCausalPromptNvfp4DConsumers =
+    kCausalPromptNvfp4Warps / kCausalPromptNvfp4RowTiles;
+
+inline constexpr int kCausalPromptNvfp4QBytes =
+    kCausalPromptNvfp4Br * kCausalPromptHeadDim * static_cast<int>(sizeof(__nv_bfloat16));
+inline constexpr int kCausalPromptNvfp4KRawBytes =
+    kCausalPromptNvfp4Bc * (kCausalPromptHeadDim / 2);
+inline constexpr int kCausalPromptNvfp4KBytes =
+    kCausalPromptNvfp4Bc * kCausalPromptHeadDim * static_cast<int>(sizeof(__nv_bfloat16));
+inline constexpr int kCausalPromptNvfp4VBytes = kCausalPromptNvfp4Bc * (kCausalPromptHeadDim / 2);
+inline constexpr int kCausalPromptNvfp4VStageBytes =
     kCausalPromptNvfp4Bc * kCausalPromptHeadDim * static_cast<int>(sizeof(__half));
-inline constexpr int kCausalPromptNvfp4BarrierBytes = 4 * static_cast<int>(sizeof(std::uint64_t));
+inline constexpr int kCausalPromptNvfp4PBytes =
+    kCausalPromptNvfp4Br * kCausalPromptNvfp4Bc * static_cast<int>(sizeof(__half));
+inline constexpr int kCausalPromptNvfp4ScaleBytes =
+    2 * kCausalPromptNvfp4Bc * kKVCacheNvfp4Groups;
+inline constexpr int kCausalPromptNvfp4StatsBytes =
+    7 * kCausalPromptNvfp4Br * static_cast<int>(sizeof(float));
 inline constexpr int kCausalPromptNvfp4SmemBytes =
-    3 * kCausalPromptNvfp4TileBytes + kCausalPromptNvfp4BarrierBytes;
+    kCausalPromptNvfp4QBytes + kCausalPromptNvfp4KRawBytes + kCausalPromptNvfp4KBytes +
+    kCausalPromptNvfp4VBytes + kCausalPromptNvfp4VStageBytes + kCausalPromptNvfp4PBytes +
+    kCausalPromptNvfp4ScaleBytes + kCausalPromptNvfp4StatsBytes;
 
-static_assert(kCausalPromptNvfp4Br == kCausalPromptNvfp4Bc);
-static_assert(kCausalPromptNvfp4Threads == 512);
-static_assert(kCausalPromptNvfp4SmemBytes == 98336);
-
-struct CausalPromptNvfp4Barriers {
-    alignas(8) std::uint64_t k_full;
-    alignas(8) std::uint64_t k_empty;
-    alignas(8) std::uint64_t v_full;
-    alignas(8) std::uint64_t v_empty;
-};
-
-__device__ __forceinline__ std::uint32_t causal_prompt_nvfp4_pack_f16x2(float lo, float hi) {
-    const __half2 packed = __floats2half2_rn(lo, hi);
-    return *reinterpret_cast<const std::uint32_t*>(&packed);
-}
-
-template <typename Geometry>
-__device__ __forceinline__ void
-causal_prompt_nvfp4_decode_tile(__half* destination, const std::uint8_t* cache,
-                                const std::uint8_t* cache_scale, const std::int32_t* block_table,
-                                int kv_head, int tile_k0, int max_query_abs, int producer_tid) {
-    constexpr int D               = kCausalPromptHeadDim;
-    constexpr int Bc              = kCausalPromptNvfp4Bc;
-    constexpr int GroupsPerTile   = Bc * kKVCacheNvfp4Groups;
-    constexpr int ProducerThreads = kCausalPromptNvfp4ProducerThreads;
-    const int physical_page       = block_table[tile_k0 >> kPagedKVPageShift];
-    const int page_offset0        = tile_k0 & kPagedKVPageMask;
-
-#pragma unroll 1
-    for (int task = producer_tid; task < GroupsPerTile; task += ProducerThreads) {
-        const int key_l   = task / kKVCacheNvfp4Groups;
-        const int group   = task - key_l * kKVCacheNvfp4Groups;
-        const int d       = group * kKVCacheNvfp4Group;
-        const int key     = tile_k0 + key_l;
-        __half* target_lo = destination + key_l * D + causal_prompt_swz(key_l, d);
-        __half* target_hi = destination + key_l * D + causal_prompt_swz(key_l, d + 8);
-        if (key <= max_query_abs) {
-            const std::int64_t code_offset = kv_cache_nvfp4_code_index<Geometry>(
-                physical_page, kv_head, d, page_offset0 + key_l);
-            const std::int64_t scale_offset = kv_cache_nvfp4_scale_index<Geometry>(
-                physical_page, kv_head, group, page_offset0 + key_l);
-            const auto represented =
-                kv_cache_nvfp4_dequant_f16x16(cache + code_offset, cache_scale[scale_offset]);
-            store_vec(target_lo, represented.lo);
-            store_vec(target_hi, represented.hi);
-        } else {
-            store_vec(target_lo, make_int4(0, 0, 0, 0));
-            store_vec(target_hi, make_int4(0, 0, 0, 0));
-        }
-    }
-}
+static_assert(kCausalPromptNvfp4DConsumers == 8);
 
 template <typename Geometry, typename Metadata>
-__global__
-__launch_bounds__(kCausalPromptNvfp4Threads, 1) void causal_attention_prompt_nvfp4_kernel(
+__global__ __maxnreg__(120) void causal_attention_prompt_nvfp4_kernel(
     const __nv_bfloat16* __restrict__ q, const std::uint8_t* __restrict__ cache_k,
     const std::uint8_t* __restrict__ cache_v, const std::uint8_t* __restrict__ cache_k_scale,
     const std::uint8_t* __restrict__ cache_v_scale, Metadata metadata,
@@ -95,18 +74,38 @@ __launch_bounds__(kCausalPromptNvfp4Threads, 1) void causal_attention_prompt_nvf
     constexpr int D             = kCausalPromptHeadDim;
     constexpr int Br            = kCausalPromptNvfp4Br;
     constexpr int Bc            = kCausalPromptNvfp4Bc;
-    constexpr int QKNt          = Bc / 8;
     constexpr int QKKs          = D / 16;
-    constexpr int PVNt          = D / 8;
+    constexpr int QKNt          = (Bc / 2) / 8;
+    constexpr int PVNtPerWarp   = D / (kCausalPromptNvfp4DConsumers * 8);
     constexpr int PVKs          = Bc / 16;
-    constexpr float Log2E       = 1.4426950408889634074F;
+    constexpr int ProducerWarps = kCausalPromptNvfp4ProducerWarps;
+    constexpr int VWorkerWarps  = kCausalPromptNvfp4Warps - ProducerWarps;
+    constexpr int WorkerThreads = VWorkerWarps * 32;
+    constexpr float Log2E       = 1.4426950408889634074f;
     constexpr unsigned FullMask = 0xffffffffU;
+    static_assert(QKKs == 16);
+    static_assert(PVNtPerWarp == 4);
 
     extern __shared__ __align__(16) unsigned char smem_raw[];
-    __half* q_f16  = reinterpret_cast<__half*>(smem_raw);
-    __half* k_f16  = q_f16 + Br * D;
-    __half* v_f16  = k_f16 + Bc * D;
-    auto* barriers = reinterpret_cast<CausalPromptNvfp4Barriers*>(v_f16 + Bc * D);
+    __nv_bfloat16* q_b16  = reinterpret_cast<__nv_bfloat16*>(smem_raw);
+    std::uint8_t* k_nvfp4 = reinterpret_cast<std::uint8_t*>(
+        reinterpret_cast<unsigned char*>(q_b16) + kCausalPromptNvfp4QBytes);
+    __nv_bfloat16* k_b16 =
+        reinterpret_cast<__nv_bfloat16*>(k_nvfp4 + kCausalPromptNvfp4KRawBytes);
+    std::uint8_t* v_nvfp4 = reinterpret_cast<std::uint8_t*>(
+        reinterpret_cast<unsigned char*>(k_b16) + kCausalPromptNvfp4KBytes);
+    __half* v_f16 = reinterpret_cast<__half*>(v_nvfp4 + kCausalPromptNvfp4VBytes);
+    __half* p_s   = reinterpret_cast<__half*>(reinterpret_cast<unsigned char*>(v_f16) +
+                                             kCausalPromptNvfp4VStageBytes);
+    std::uint8_t* k_scale_s = reinterpret_cast<std::uint8_t*>(
+        reinterpret_cast<unsigned char*>(p_s) + kCausalPromptNvfp4PBytes);
+    std::uint8_t* v_scale_s = k_scale_s + Bc * kKVCacheNvfp4Groups;
+    float* running_m_s =
+        reinterpret_cast<float*>(v_scale_s + Bc * kKVCacheNvfp4Groups);
+    float* running_l_s = running_m_s + Br;
+    float* partial_m_s = running_l_s + Br;
+    float* partial_l_s = partial_m_s + 2 * Br;
+    float* alpha_s     = partial_l_s + 2 * Br;
 
     const int q_block = static_cast<int>(blockIdx.x);
     const int q_head  = static_cast<int>(blockIdx.y);
@@ -122,23 +121,16 @@ __launch_bounds__(kCausalPromptNvfp4Threads, 1) void causal_attention_prompt_nvf
                                                  kCausalPromptNvfp4Threads);
         return;
     }
-
     const int base_pos              = positions[0];
     const std::int32_t* block_table = metadata.block_table();
     const int tile_rows             = min(Br, tokens - q0);
     const int max_query_abs         = base_pos + q0 + tile_rows - 1;
     const int key_blocks            = max_query_abs / Bc + 1;
 
-    if (tid == 0) {
-        cta_mbarrier_init(&barriers->k_full, 1);
-        cta_mbarrier_init(&barriers->k_empty, 1);
-        cta_mbarrier_init(&barriers->v_full, 1);
-        cta_mbarrier_init(&barriers->v_empty, 1);
-        cta_mbarrier_fence_init();
-    }
-
-    for (int row = warp; row < Br;
-         row += kCausalPromptNvfp4ProducerWarps + kCausalPromptNvfp4ConsumerWarps) {
+    // Q is never quantized -- only the cache is NVFP4-coded -- but the D256 rotation is a
+    // property of the stored (permanently rotated) K, so Q must be rotated the same way for Q.K
+    // to be correct; see the file comment.
+    for (int row = warp; row < Br; row += kCausalPromptNvfp4Warps) {
         float values[8];
 #pragma unroll
         for (int r = 0; r < 8; ++r) {
@@ -151,238 +143,292 @@ __launch_bounds__(kCausalPromptNvfp4Threads, 1) void causal_attention_prompt_nvf
         normalized_hadamard_d256_inplace(values, lane);
 #pragma unroll
         for (int r = 0; r < 8; ++r) {
-            const int d                                = lane + 32 * r;
-            q_f16[row * D + causal_prompt_swz(row, d)] = __float2half_rn(values[r]);
+            const int d = lane + 32 * r;
+            q_b16[row * D + causal_prompt_swz(row, d)] = __float2bfloat16(values[r]);
         }
+    }
+    if (tid < Br) {
+        running_m_s[tid] = -CUDART_INF_F;
+        running_l_s[tid] = 0.0F;
     }
     __syncthreads();
 
-    if (tid < kCausalPromptNvfp4ProducerThreads) {
-        asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" : : : "memory");
-        const int producer_tid = tid;
-        for (int kb = 0; kb < key_blocks; ++kb) {
-            const std::uint32_t empty_phase = 1U ^ static_cast<std::uint32_t>(kb & 1);
-            cta_mbarrier_wait(&barriers->k_empty, empty_phase);
-            causal_prompt_nvfp4_decode_tile<Geometry>(k_f16, cache_k, cache_k_scale, block_table,
-                                                      kv_head, kb * Bc, max_query_abs,
-                                                      producer_tid);
-            asm volatile("bar.sync 1, %0;" : : "r"(kCausalPromptNvfp4ProducerThreads) : "memory");
-            if (producer_tid == 0) { cta_mbarrier_arrive(&barriers->k_full); }
+    const int gid      = lane >> 2;
+    const int lid      = lane & 3;
+    const int a_mat    = lane >> 3;
+    const int a_rin    = lane & 7;
+    const int a_rowoff = a_rin + ((a_mat & 1) << 3);
+    const int a_coloff = (a_mat >> 1) << 3;
+    const int b_rin    = lane & 7;
+    const int b_koff   = ((lane >> 3) & 1) << 3;
 
-            cta_mbarrier_wait(&barriers->v_empty, empty_phase);
-            causal_prompt_nvfp4_decode_tile<Geometry>(v_f16, cache_v, cache_v_scale, block_table,
-                                                      kv_head, kb * Bc, max_query_abs,
-                                                      producer_tid);
-            asm volatile("bar.sync 1, %0;" : : "r"(kCausalPromptNvfp4ProducerThreads) : "memory");
-            if (producer_tid == 0) { cta_mbarrier_arrive(&barriers->v_full); }
+    auto issue_kv_scales = [&](int tile_k0, int cooperative_tid, int cooperative_threads) {
+        const int physical_page = block_table[tile_k0 >> kPagedKVPageShift];
+        const int page_offset0  = tile_k0 & (kPagedKVPageSize - 1);
+        for (int key_l = cooperative_tid; key_l < Bc; key_l += cooperative_threads) {
+            const int key = tile_k0 + key_l;
+            if (key <= max_query_abs) {
+                const std::int64_t k_off = kv_cache_nvfp4_scale_index<Geometry>(
+                    physical_page, kv_head, 0, page_offset0 + key_l);
+                const std::int64_t v_off = kv_cache_nvfp4_scale_index<Geometry>(
+                    physical_page, kv_head, 0, page_offset0 + key_l);
+                cp_async<16>(k_scale_s + key_l * kKVCacheNvfp4Groups, cache_k_scale + k_off);
+                cp_async<16>(v_scale_s + key_l * kKVCacheNvfp4Groups, cache_v_scale + v_off);
+            } else {
+                store_vec(k_scale_s + key_l * kKVCacheNvfp4Groups, make_int4(0, 0, 0, 0));
+                store_vec(v_scale_s + key_l * kKVCacheNvfp4Groups, make_int4(0, 0, 0, 0));
+            }
         }
-        return;
-    }
+    };
 
-    asm volatile("setmaxnreg.inc.sync.aligned.u32 232;" : : : "memory");
-    const int consumer_tid  = tid - kCausalPromptNvfp4ProducerThreads;
-    const int consumer_warp = consumer_tid >> 5;
-    const int gid           = lane >> 2;
-    const int lid           = lane & 3;
-    const int a_mat         = lane >> 3;
-    const int a_rin         = lane & 7;
-    const int a_rowoff      = a_rin + ((a_mat & 1) << 3);
-    const int b_rin         = lane & 7;
-    const int b_koff        = ((lane >> 3) & 1) << 3;
-    const int warp_row0     = consumer_warp * 16;
+    auto issue_kv_codes = [&](int tile_k0, int cooperative_tid, int cooperative_threads) {
+        const int physical_page = block_table[tile_k0 >> kPagedKVPageShift];
+        const int page_offset0  = tile_k0 & (kPagedKVPageSize - 1);
+#pragma unroll 1
+        for (int chunk = cooperative_tid; chunk < Bc * (D / 32); chunk += cooperative_threads) {
+            const int key_l  = chunk / (D / 32);
+            const int dc     = chunk - key_l * (D / 32);
+            const int d      = dc * 32;
+            const int key    = tile_k0 + key_l;
+            std::uint8_t* kd = &k_nvfp4[key_l * (D / 2) + d / 2];
+            std::uint8_t* vd = &v_nvfp4[key_l * (D / 2) + d / 2];
+            if (key <= max_query_abs) {
+                const std::int64_t k_off = kv_cache_nvfp4_code_index<Geometry>(
+                    physical_page, kv_head, d, page_offset0 + key_l);
+                const std::int64_t v_off = kv_cache_nvfp4_code_index<Geometry>(
+                    physical_page, kv_head, d, page_offset0 + key_l);
+                cp_async<16, Cache::cg>(kd, &cache_k[k_off]);
+                cp_async<16, Cache::cg>(vd, &cache_v[v_off]);
+            } else {
+                store_vec(kd, make_int4(0, 0, 0, 0));
+                store_vec(vd, make_int4(0, 0, 0, 0));
+            }
+        }
+        ninfer::ops::cp_commit();
+    };
 
-    const unsigned q_sbase     = smem_addr(q_f16);
-    const unsigned k_sbase     = smem_addr(k_f16);
-    const unsigned v_sbase     = smem_addr(v_f16);
-    const unsigned q_lane_base = q_sbase + static_cast<unsigned>((warp_row0 + a_rowoff) * 512);
-    const unsigned q_as        = static_cast<unsigned>((a_mat >> 1) << 4);
-    const unsigned q_r         = static_cast<unsigned>(a_rin << 4);
-    const unsigned k_lane_base =
-        k_sbase + static_cast<unsigned>(b_rin * 512) + (static_cast<unsigned>(lane >> 4) << 12);
-    const unsigned k_as        = static_cast<unsigned>((b_koff >> 3) << 4);
-    const unsigned k_r         = static_cast<unsigned>(b_rin << 4);
-    const unsigned v_lane_base = v_sbase + static_cast<unsigned>(((lane >> 3) & 1) * 4096) +
-                                 static_cast<unsigned>(b_rin * 512);
-    const unsigned v_as = static_cast<unsigned>((lane >> 4) << 4);
-    const unsigned v_r  = static_cast<unsigned>(b_rin << 4);
+    auto issue_kv_tile = [&](int tile_k0, int cooperative_tid, int cooperative_threads) {
+        issue_kv_scales(tile_k0, cooperative_tid, cooperative_threads);
+        issue_kv_codes(tile_k0, cooperative_tid, cooperative_threads);
+    };
 
-    float acc[PVNt][4];
+    // Dequantizes the just-landed K tile (raw e2m1 codes in k_nvfp4, one E4M3 scale per 16-value
+    // group in k_scale_s) into the tensor-core-friendly BF16 layout QK reads via ldmatrix. All
+    // threads participate; callers must cp_wait<0>() first and __syncthreads() after.
+    auto dequant_k_tile = [&]() {
+#pragma unroll 1
+        for (int chunk = tid; chunk < Bc * (D / 8); chunk += kCausalPromptNvfp4Threads) {
+            const int key_l      = chunk / (D / 8);
+            const int dc         = chunk - key_l * (D / 8);
+            const int d          = dc * 8;
+            __nv_bfloat16* k_dst = &k_b16[key_l * D + causal_prompt_swz(key_l, d)];
+            store_vec(k_dst, kv_cache_nvfp4_dequant_bf16x8(
+                                 &k_nvfp4[key_l * (D / 2) + d / 2],
+                                 k_scale_s[key_l * kKVCacheNvfp4Groups + d / kKVCacheNvfp4Group]));
+        }
+    };
+
+    issue_kv_tile(0, tid, kCausalPromptNvfp4Threads);
+    ninfer::ops::cp_wait<0>();
+    __syncthreads();
+    dequant_k_tile();
+    __syncthreads();
+
+    float acc[PVNtPerWarp][4];
 #pragma unroll
-    for (int n = 0; n < PVNt; ++n) {
+    for (int n = 0; n < PVNtPerWarp; ++n) {
 #pragma unroll
         for (int i = 0; i < 4; ++i) acc[n][i] = 0.0F;
     }
-    float m0             = -CUDART_INF_F;
-    float m1             = -CUDART_INF_F;
-    float l0             = 0.0F;
-    float l1             = 0.0F;
     const float scale_l2 = scale * Log2E;
-
     for (int kb = 0; kb < key_blocks; ++kb) {
-        const int k0                   = kb * Bc;
-        const std::uint32_t full_phase = static_cast<std::uint32_t>(kb & 1);
-        cta_mbarrier_wait(&barriers->k_full, full_phase);
+        const int k0 = kb * Bc;
+        if (warp < ProducerWarps) {
+            const int row_base = (warp >> 1) * 16;
+            const int col_half = warp & 1;
+            const int col_base = col_half * (Bc / 2);
+            float score[QKNt][4];
+#pragma unroll
+            for (int nt = 0; nt < QKNt; ++nt)
+                score[nt][0] = score[nt][1] = score[nt][2] = score[nt][3] = 0.0F;
 
-        float score[QKNt][4];
 #pragma unroll
-        for (int nt = 0; nt < QKNt; ++nt)
-            score[nt][0] = score[nt][1] = score[nt][2] = score[nt][3] = 0.0F;
-
-        unsigned af[2][4];
-        unsigned bf[2][QKNt][2];
-        ldmatrix_x4(af[0][0], af[0][1], af[0][2], af[0][3],
-                    causal_prompt_swz_addr(q_lane_base, 0U, q_as, q_r));
+            for (int kk = 0; kk < QKKs; ++kk) {
+                const int acol = kk * 16 + a_coloff;
+                unsigned af[4];
+                ldmatrix_x4(af[0], af[1], af[2], af[3],
+                            smem_addr(&q_b16[(row_base + a_rowoff) * D +
+                                             causal_prompt_swz(row_base + a_rowoff, acol)]));
 #pragma unroll
-        for (int nt2 = 0; nt2 < QKNt; nt2 += 2) {
-            ldmatrix_x4(bf[0][nt2][0], bf[0][nt2][1], bf[0][nt2 + 1][0], bf[0][nt2 + 1][1],
-                        causal_prompt_swz_addr(k_lane_base + static_cast<unsigned>(nt2 * 4096), 0U,
-                                               k_as, k_r));
-        }
-#pragma unroll
-        for (int k = 0; k < QKKs; ++k) {
-            const int cur = k & 1;
-            const int nxt = cur ^ 1;
-            if (k + 1 < QKKs) {
-                const unsigned ck = static_cast<unsigned>((k + 1) << 5);
-                ldmatrix_x4(af[nxt][0], af[nxt][1], af[nxt][2], af[nxt][3],
-                            causal_prompt_swz_addr(q_lane_base, ck, q_as, q_r));
-#pragma unroll
-                for (int nt2 = 0; nt2 < QKNt; nt2 += 2) {
-                    ldmatrix_x4(
-                        bf[nxt][nt2][0], bf[nxt][nt2][1], bf[nxt][nt2 + 1][0], bf[nxt][nt2 + 1][1],
-                        causal_prompt_swz_addr(k_lane_base + static_cast<unsigned>(nt2 * 4096), ck,
-                                               k_as, k_r));
+                for (int nt = 0; nt < QKNt; ++nt) {
+                    const int brow = col_base + nt * 8 + b_rin;
+                    const int bcol = kk * 16 + b_koff;
+                    unsigned bf[2];
+                    ldmatrix_x2(bf[0], bf[1],
+                                smem_addr(&k_b16[brow * D + causal_prompt_swz(brow, bcol)]));
+                    mma_bf16(score[nt][0], score[nt][1], score[nt][2], score[nt][3], af[0], af[1],
+                             af[2], af[3], bf[0], bf[1]);
                 }
             }
+
+            const int row0             = row_base + gid;
+            const int row1             = row0 + 8;
+            const int qabs0            = row0 < tile_rows ? base_pos + q0 + row0 : -1;
+            const int qabs1            = row1 < tile_rows ? base_pos + q0 + row1 : -1;
+            const bool full_score_tile = q0 + Br <= tokens && k0 + Bc - 1 <= base_pos + q0;
+            float bm0                  = -CUDART_INF_F;
+            float bm1                  = -CUDART_INF_F;
 #pragma unroll
             for (int nt = 0; nt < QKNt; ++nt) {
-                mma_f16(score[nt][0], score[nt][1], score[nt][2], score[nt][3], af[cur][0],
-                        af[cur][1], af[cur][2], af[cur][3], bf[cur][nt][0], bf[cur][nt][1]);
-            }
-        }
-
-        asm volatile("bar.sync 2, 128;" : : : "memory");
-        if (consumer_tid == 0) { cta_mbarrier_arrive(&barriers->k_empty); }
-
-        const int row0             = warp_row0 + gid;
-        const int row1             = row0 + 8;
-        const int qrow0            = q0 + row0;
-        const int qrow1            = q0 + row1;
-        const int qabs0            = qrow0 < tokens ? base_pos + qrow0 : -1;
-        const int qabs1            = qrow1 < tokens ? base_pos + qrow1 : -1;
-        const bool full_score_tile = q0 + Br <= tokens && k0 + Bc - 1 <= base_pos + q0;
-        float bm0                  = -CUDART_INF_F;
-        float bm1                  = -CUDART_INF_F;
-        if (full_score_tile) {
-#pragma unroll
-            for (int nt = 0; nt < QKNt; ++nt) {
+                const int key0 = k0 + col_base + nt * 8 + 2 * lid;
+                const int key1 = key0 + 1;
+                if (!full_score_tile) {
+                    score[nt][0] = key0 <= qabs0 ? score[nt][0] : -CUDART_INF_F;
+                    score[nt][1] = key1 <= qabs0 ? score[nt][1] : -CUDART_INF_F;
+                    score[nt][2] = key0 <= qabs1 ? score[nt][2] : -CUDART_INF_F;
+                    score[nt][3] = key1 <= qabs1 ? score[nt][3] : -CUDART_INF_F;
+                }
                 bm0 = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
                 bm1 = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
             }
-        } else {
+            bm0 = warp_max<4>(bm0, FullMask);
+            bm1 = warp_max<4>(bm1, FullMask);
+            if (lid == 0) {
+                partial_m_s[col_half * Br + row0] = bm0;
+                partial_m_s[col_half * Br + row1] = bm1;
+            }
+            asm volatile("bar.sync 1, 128;" ::: "memory");
+
+            bm0                     = fmaxf(partial_m_s[row0], partial_m_s[Br + row0]);
+            bm1                     = fmaxf(partial_m_s[row1], partial_m_s[Br + row1]);
+            const float previous_m0 = running_m_s[row0];
+            const float previous_m1 = running_m_s[row1];
+            const float nm0         = fmaxf(previous_m0, bm0);
+            const float nm1         = fmaxf(previous_m1, bm1);
+            const float nm0_scaled  = nm0 * scale_l2;
+            const float nm1_scaled  = nm1 * scale_l2;
+            const float alpha0      = previous_m0 == -CUDART_INF_F
+                                          ? 0.0F
+                                          : exp2_approx(__fmaf_rn(previous_m0, scale_l2, -nm0_scaled));
+            const float alpha1      = previous_m1 == -CUDART_INF_F
+                                          ? 0.0F
+                                          : exp2_approx(__fmaf_rn(previous_m1, scale_l2, -nm1_scaled));
+            float bl0               = 0.0F;
+            float bl1               = 0.0F;
 #pragma unroll
             for (int nt = 0; nt < QKNt; ++nt) {
-                const int key0 = k0 + nt * 8 + 2 * lid;
-                const int key1 = key0 + 1;
-                score[nt][0]   = qrow0 < tokens && key0 <= qabs0 ? score[nt][0] : -CUDART_INF_F;
-                score[nt][1]   = qrow0 < tokens && key1 <= qabs0 ? score[nt][1] : -CUDART_INF_F;
-                score[nt][2]   = qrow1 < tokens && key0 <= qabs1 ? score[nt][2] : -CUDART_INF_F;
-                score[nt][3]   = qrow1 < tokens && key1 <= qabs1 ? score[nt][3] : -CUDART_INF_F;
-                bm0            = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
-                bm1            = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
+                const int col0  = col_base + nt * 8 + 2 * lid;
+                const int col1  = col0 + 1;
+                const float p00 = score[nt][0] > -CUDART_INF_F
+                                      ? exp2_approx(__fmaf_rn(score[nt][0], scale_l2, -nm0_scaled))
+                                      : 0.0F;
+                const float p01 = score[nt][1] > -CUDART_INF_F
+                                      ? exp2_approx(__fmaf_rn(score[nt][1], scale_l2, -nm0_scaled))
+                                      : 0.0F;
+                const float p10 = score[nt][2] > -CUDART_INF_F
+                                      ? exp2_approx(__fmaf_rn(score[nt][2], scale_l2, -nm1_scaled))
+                                      : 0.0F;
+                const float p11 = score[nt][3] > -CUDART_INF_F
+                                      ? exp2_approx(__fmaf_rn(score[nt][3], scale_l2, -nm1_scaled))
+                                      : 0.0F;
+                bl0 += p00 + p01;
+                bl1 += p10 + p11;
+                p_s[row0 * Bc + causal_prompt_p_swz<Bc>(row0, col0)] = __float2half_rn(p00);
+                p_s[row0 * Bc + causal_prompt_p_swz<Bc>(row0, col1)] = __float2half_rn(p01);
+                p_s[row1 * Bc + causal_prompt_p_swz<Bc>(row1, col0)] = __float2half_rn(p10);
+                p_s[row1 * Bc + causal_prompt_p_swz<Bc>(row1, col1)] = __float2half_rn(p11);
+            }
+            bl0 = warp_sum<4>(bl0, FullMask);
+            bl1 = warp_sum<4>(bl1, FullMask);
+            if (lid == 0) {
+                partial_l_s[col_half * Br + row0] = bl0;
+                partial_l_s[col_half * Br + row1] = bl1;
+            }
+            asm volatile("bar.sync 1, 128;" ::: "memory");
+            if (col_half == 0 && lid == 0) {
+                const float tile_l0 = partial_l_s[row0] + partial_l_s[Br + row0];
+                const float tile_l1 = partial_l_s[row1] + partial_l_s[Br + row1];
+                running_l_s[row0]   = __fmaf_rn(running_l_s[row0], alpha0, tile_l0);
+                running_l_s[row1]   = __fmaf_rn(running_l_s[row1], alpha1, tile_l1);
+                running_m_s[row0]   = nm0;
+                running_m_s[row1]   = nm1;
+                alpha_s[row0]       = alpha0;
+                alpha_s[row1]       = alpha1;
+            }
+        } else if (warp < ProducerWarps + VWorkerWarps) {
+            const int worker_tid = tid - ProducerWarps * 32;
+#pragma unroll 1
+            for (int chunk = worker_tid; chunk < Bc * (D / 8); chunk += WorkerThreads) {
+                const int key_l = chunk / (D / 8);
+                const int dc    = chunk - key_l * (D / 8);
+                const int d     = dc * 8;
+                const int key   = k0 + key_l;
+                __half* dst     = &v_f16[key_l * D + causal_prompt_swz(key_l, d)];
+                if (key <= max_query_abs) {
+                    store_vec(dst,
+                              kv_cache_nvfp4_dequant_f16x8(
+                                  &v_nvfp4[key_l * (D / 2) + d / 2],
+                                  v_scale_s[key_l * kKVCacheNvfp4Groups + d / kKVCacheNvfp4Group]));
+                } else {
+                    store_vec(dst, make_int4(0, 0, 0, 0));
+                }
             }
         }
-        bm0 = warp_max<4>(bm0, FullMask);
-        bm1 = warp_max<4>(bm1, FullMask);
+        __syncthreads();
 
-        const float nm0        = fmaxf(m0, bm0);
-        const float nm1        = fmaxf(m1, bm1);
-        const float nm0_scaled = nm0 * scale_l2;
-        const float nm1_scaled = nm1 * scale_l2;
-        const float alpha0 =
-            m0 == -CUDART_INF_F ? 0.0F : exp2_approx(__fmaf_rn(m0, scale_l2, -nm0_scaled));
-        const float alpha1 =
-            m1 == -CUDART_INF_F ? 0.0F : exp2_approx(__fmaf_rn(m1, scale_l2, -nm1_scaled));
-        float bl0 = 0.0F;
-        float bl1 = 0.0F;
-        unsigned p_frag[PVKs][4];
-#pragma unroll
-        for (int nt = 0; nt < QKNt; ++nt) {
-            const float p00 = score[nt][0] > -CUDART_INF_F
-                                  ? exp2_approx(__fmaf_rn(score[nt][0], scale_l2, -nm0_scaled))
-                                  : 0.0F;
-            const float p01 = score[nt][1] > -CUDART_INF_F
-                                  ? exp2_approx(__fmaf_rn(score[nt][1], scale_l2, -nm0_scaled))
-                                  : 0.0F;
-            const float p10 = score[nt][2] > -CUDART_INF_F
-                                  ? exp2_approx(__fmaf_rn(score[nt][2], scale_l2, -nm1_scaled))
-                                  : 0.0F;
-            const float p11 = score[nt][3] > -CUDART_INF_F
-                                  ? exp2_approx(__fmaf_rn(score[nt][3], scale_l2, -nm1_scaled))
-                                  : 0.0F;
-            bl0 += p00 + p01;
-            bl1 += p10 + p11;
-            const int pk = nt >> 1;
-            if ((nt & 1) == 0) {
-                p_frag[pk][0] = causal_prompt_nvfp4_pack_f16x2(p00, p01);
-                p_frag[pk][1] = causal_prompt_nvfp4_pack_f16x2(p10, p11);
-            } else {
-                p_frag[pk][2] = causal_prompt_nvfp4_pack_f16x2(p00, p01);
-                p_frag[pk][3] = causal_prompt_nvfp4_pack_f16x2(p10, p11);
-            }
-        }
+        const bool has_next = kb + 1 < key_blocks;
+        if (has_next) issue_kv_tile((kb + 1) * Bc, tid, kCausalPromptNvfp4Threads);
 
-        l0 = __fmaf_rn(l0, alpha0, bl0);
-        l1 = __fmaf_rn(l1, alpha1, bl1);
-        m0 = nm0;
-        m1 = nm1;
+        const int row_tile = warp % kCausalPromptNvfp4RowTiles;
+        const int d_slice  = warp / kCausalPromptNvfp4RowTiles;
+        const int row_base = row_tile * 16;
+        const float alpha0 = alpha_s[row_base + gid];
+        const float alpha1 = alpha_s[row_base + gid + 8];
 #pragma unroll
-        for (int n = 0; n < PVNt; ++n) {
+        for (int n = 0; n < PVNtPerWarp; ++n) {
             acc[n][0] *= alpha0;
             acc[n][1] *= alpha0;
             acc[n][2] *= alpha1;
             acc[n][3] *= alpha1;
         }
 
-        cta_mbarrier_wait(&barriers->v_full, full_phase);
-        constexpr int PVHalf  = PVNt / 2;
-        constexpr int PVLoads = PVKs * PVHalf;
-        unsigned vf[2][4];
-        ldmatrix_x4_t(vf[0][0], vf[0][1], vf[0][2], vf[0][3],
-                      causal_prompt_swz_addr(v_lane_base, 0U, v_as, v_r));
 #pragma unroll
-        for (int li = 0; li < PVLoads; ++li) {
-            const int k   = li / PVHalf;
-            const int n2  = (li % PVHalf) * 2;
-            const int cur = li & 1;
-            const int nxt = cur ^ 1;
-            if (li + 1 < PVLoads) {
-                const int k2       = (li + 1) / PVHalf;
-                const int n2b      = ((li + 1) % PVHalf) * 2;
-                const unsigned ckv = static_cast<unsigned>(n2b << 4);
-                ldmatrix_x4_t(vf[nxt][0], vf[nxt][1], vf[nxt][2], vf[nxt][3],
-                              causal_prompt_swz_addr(v_lane_base + static_cast<unsigned>(k2 * 8192),
-                                                     ckv, v_as, v_r));
+        for (int k = 0; k < PVKs; ++k) {
+            unsigned pf[4];
+            const int pcol = k * 16 + a_coloff;
+            ldmatrix_x4(pf[0], pf[1], pf[2], pf[3],
+                        smem_addr(&p_s[(row_base + a_rowoff) * Bc +
+                                       causal_prompt_p_swz<Bc>(row_base + a_rowoff, pcol)]));
+#pragma unroll
+            for (int n = 0; n < PVNtPerWarp; ++n) {
+                const int global_n = d_slice * PVNtPerWarp + n;
+                unsigned vf[2];
+                const int vrow = k * 16 + b_koff + b_rin;
+                const int vcol = global_n * 8;
+                ldmatrix_x2_t(vf[0], vf[1],
+                              smem_addr(&v_f16[vrow * D + causal_prompt_swz(vrow, vcol)]));
+                mma_f16(acc[n][0], acc[n][1], acc[n][2], acc[n][3], pf[0], pf[1], pf[2], pf[3],
+                        vf[0], vf[1]);
             }
-            mma_f16(acc[n2][0], acc[n2][1], acc[n2][2], acc[n2][3], p_frag[k][0], p_frag[k][1],
-                    p_frag[k][2], p_frag[k][3], vf[cur][0], vf[cur][1]);
-            mma_f16(acc[n2 + 1][0], acc[n2 + 1][1], acc[n2 + 1][2], acc[n2 + 1][3], p_frag[k][0],
-                    p_frag[k][1], p_frag[k][2], p_frag[k][3], vf[cur][2], vf[cur][3]);
         }
-        asm volatile("bar.sync 2, 128;" : : : "memory");
-        if (consumer_tid == 0) { cta_mbarrier_arrive(&barriers->v_empty); }
+        if (has_next) {
+            ninfer::ops::cp_wait<0>();
+            dequant_k_tile();
+        }
+        __syncthreads();
     }
 
-    l0                 = warp_sum<4>(l0, FullMask);
-    l1                 = warp_sum<4>(l1, FullMask);
-    const float inv_l0 = l0 > 0.0F ? __frcp_rn(l0) : 0.0F;
-    const float inv_l1 = l1 > 0.0F ? __frcp_rn(l1) : 0.0F;
+    const int row_tile = warp % kCausalPromptNvfp4RowTiles;
+    const int d_slice  = warp / kCausalPromptNvfp4RowTiles;
+    const int row_base = row_tile * 16;
+    const int row0     = row_base + gid;
+    const int row1     = row0 + 8;
+    const float inv_l0 = running_l_s[row0] > 0.0F ? __frcp_rn(running_l_s[row0]) : 0.0F;
+    const float inv_l1 = running_l_s[row1] > 0.0F ? __frcp_rn(running_l_s[row1]) : 0.0F;
     float* rotated_out = reinterpret_cast<float*>(smem_raw);
 #pragma unroll
-    for (int n = 0; n < PVNt; ++n) {
-        const int d0   = n * 8 + 2 * lid;
-        const int row0 = warp_row0 + gid;
-        const int row1 = row0 + 8;
+    for (int n = 0; n < PVNtPerWarp; ++n) {
+        const int d0 = (d_slice * PVNtPerWarp + n) * 8 + 2 * lid;
         if (row0 < tile_rows) {
             *reinterpret_cast<float2*>(&rotated_out[row0 * D + d0]) =
                 make_float2(acc[n][0] * inv_l0, acc[n][1] * inv_l0);
@@ -392,9 +438,10 @@ __launch_bounds__(kCausalPromptNvfp4Threads, 1) void causal_attention_prompt_nvf
                 make_float2(acc[n][2] * inv_l1, acc[n][3] * inv_l1);
         }
     }
-    asm volatile("bar.sync 2, 128;" : : : "memory");
+    __syncthreads();
 
-    for (int row = consumer_warp; row < tile_rows; row += kCausalPromptNvfp4ConsumerWarps) {
+    // R is symmetric, but this application is the inverse/transpose semantic boundary.
+    for (int row = warp; row < tile_rows; row += kCausalPromptNvfp4Warps) {
         float values[8];
 #pragma unroll
         for (int r = 0; r < 8; ++r) values[r] = rotated_out[row * D + lane + 32 * r];
@@ -405,8 +452,10 @@ __launch_bounds__(kCausalPromptNvfp4Threads, 1) void causal_attention_prompt_nvf
             out[causal_prompt_q_index<Geometry>(q_head, d, q0 + row)] = __float2bfloat16(values[r]);
         }
     }
-    causal_prompt_zero_output_rows<Geometry>(out, q_head, tokens, min(q0 + Br, width), consumer_tid,
-                                             kCausalPromptNvfp4ConsumerThreads);
+    __syncthreads();
+
+    causal_prompt_zero_output_rows<Geometry>(out, q_head, tokens, min(q0 + Br, width), tid,
+                                             kCausalPromptNvfp4Threads);
 }
 
 } // namespace ninfer::ops

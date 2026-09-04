@@ -6,6 +6,7 @@
 #include "ops/kernel/paged_kv_address.cuh"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
@@ -98,6 +99,30 @@ __device__ __forceinline__ int4 kv_cache_nvfp4_dequant_f16x8(const std::uint8_t*
     }
     return make_int4(static_cast<int>(half_bits[0]), static_cast<int>(half_bits[1]),
                      static_cast<int>(half_bits[2]), static_cast<int>(half_bits[3]));
+}
+
+// BF16 counterpart of kv_cache_nvfp4_dequant_f16x8, for QK MMA operands on hardware with no FP4
+// tensor-core path (sm_86/sm_89): the nvfp4-format prompt kernel dequantizes K to BF16 (matching
+// Q's storage) instead of FP16.
+__device__ __forceinline__ int4 kv_cache_nvfp4_dequant_bf16x8(const std::uint8_t* codes,
+                                                              std::uint8_t scale_code) {
+    const std::uint32_t packed = load_vec<std::uint32_t>(codes);
+    const std::uint8_t* bytes  = reinterpret_cast<const std::uint8_t*>(&packed);
+    __nv_fp8_e4m3 encoded_scale;
+    encoded_scale.__x  = scale_code;
+    const float scale_f = static_cast<float>(encoded_scale);
+    unsigned bf16_bits[4];
+#pragma unroll
+    for (int pair = 0; pair < 4; ++pair) {
+        __nv_fp4x2_e2m1 encoded;
+        encoded.__x           = bytes[pair];
+        const float2 decoded  = static_cast<float2>(encoded);
+        const __nv_bfloat162 value =
+            __floats2bfloat162_rn(decoded.x * scale_f, decoded.y * scale_f);
+        bf16_bits[pair] = *reinterpret_cast<const unsigned*>(&value);
+    }
+    return make_int4(static_cast<int>(bf16_bits[0]), static_cast<int>(bf16_bits[1]),
+                     static_cast<int>(bf16_bits[2]), static_cast<int>(bf16_bits[3]));
 }
 
 struct KVCacheNvfp4DequantizedF16x16 {
