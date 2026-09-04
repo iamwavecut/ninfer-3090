@@ -36,7 +36,6 @@ constexpr float kScale                   = 0.0625F;
 constexpr std::size_t kFlushBytes        = std::size_t{256} << 20;
 constexpr double kDenseF16Bf16TcTflops   = 209.5;
 const double kDenseFp8TcTflops = bench::device_specs().fp8_f32acc_tflops;
-constexpr double kMixedFp8F16TcTflops    = 279.333;
 const double kRtx5090DramGBs = bench::device_specs().dram_spec_gbs;
 const double kColdPureReadCeilingGBs = bench::device_specs().sustained_read_gbs;
 
