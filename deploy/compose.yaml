@@ -62,10 +62,17 @@ services:
       - overlay
       - --vision-max-merged
       - "12288"
-      # Startup-fixed pinned host memory. The engine never demotes KV to host at
-      # --max-concurrency 1, so this is reserve-only; the host has 62 GiB total.
+      # Startup-fixed pinned host memory on a 62 GiB host shared with other services.
+      # Host RAM budget for this instance is 4 GiB in total: pinned KV 1 GiB (~130k parked rk8v4
+      # tokens), two host StateImage slots, and small media buffers; the rest is CUDA/runtime.
       - --host-kv-mib
-      - "4096"
+      - "1024"
+      - --host-state-slots
+      - "2"
+      - --media-cache-mib
+      - "256"
+      - --media-live-mib
+      - "512"
       - --default-max-tokens
       - "16384"
       # Measured on an RTX 3090 with ninfer_context_cost_bench (prefill suite on this artifact,
