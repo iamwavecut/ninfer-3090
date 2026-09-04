@@ -561,6 +561,27 @@ Each category contains three fixtures and five seeds per fixture, for 15 samples
 The baseline and speculative-decode suites intentionally measure different supported workloads.
 No per-scenario baseline/speculative speedup is reported.
 
+### Context-cost calibration on RTX 3090 (`groupwise-int`, sm_86)
+
+The planner's compiled cost profile describes an RTX 5090; on a 3090 it predicts prefill about
+2.3× too fast, so every retained checkpoint is valued at less than half of what it costs to
+rebuild. `ninfer_context_cost_bench --suite all` on a dedicated RunPod RTX 3090 (driver 580,
+CUDA 13.1, PCIe 4.0 x16) accepted both suites with these coefficients:
+
+| coefficient | compiled default (5090) | measured (3090) |
+|---|---:|---:|
+| prefill chunk | 40.8 ms | 53.0 ms |
+| prefill token | 0.236 ms | 1.000 ms |
+| attention pair | 7.10 ns | 13.8 ns |
+| vision item / patch | — | 7.2 ms / 25.7 µs |
+| transfer d2h / h2d | 0.025 ns/B | 0.043 / 0.042 ns/B (23 GB/s, this pod's link) |
+
+`deploy/context-cost-presets.json` carries the prefill row as measured and the transfer rows scaled
+×4 for the production card's PCIe 3.0 x8 link (≈5.8 GB/s); latency terms are unchanged. Pass it
+with `--context-cost-presets`; the startup line then reports `context-cost-transfer=external
+context-cost-prefill=external`. Re-measure after a kernel change with the two bench commands in
+`bench/README.md` and replace the file.
+
 ### Vision residency on RTX 3090 (`groupwise-int`, sm_86)
 
 Dedicated RunPod RTX 3090 (24 GiB, driver 580.159, CUDA 13.1 build, nothing else on the GPU).

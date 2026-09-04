@@ -1,0 +1,64 @@
+{
+  "artifact_type": "ninfer_context_cost_presets",
+  "machines": [
+    {
+      "hardware_class": "nvidia-geforce-rtx-3090-sm86",
+      "prefill": [
+        {
+          "coefficients": {
+            "attention_pair_ns_q32": 59199302182,
+            "chunk_ns": 52986591,
+            "token_ns_q32": 4296136577519653,
+            "vision_item_ns": 7180839,
+            "vision_patch_ns_q32": 110592492103927
+          },
+          "model_id": "qwen3.8-27b",
+          "provenance": {
+            "artifact_path": "/root/qwen3_8_27b.ninfer",
+            "compute_capability": "8.6",
+            "corpus": "bench/fixtures/bench_corpus.ids",
+            "cuda_driver": "13.0",
+            "cuda_runtime": "13.1",
+            "device": 0,
+            "gpu": "NVIDIA GeForce RTX 3090",
+            "max_context": 8192,
+            "prefill_chunk": 1024,
+            "prefill_repetitions": 5,
+            "suite": "prefill",
+            "target": "qwen3_8_27b"
+          },
+          "weights_id": "groupwise-int"
+        }
+      ],
+      "transfer": {
+        "d2d": {
+          "batch_ns": 3702,
+          "ns_per_byte_q32": 10716799,
+          "operation_ns": 2518
+        },
+        "d2h": {
+          "batch_ns": 31954,
+          "ns_per_byte_q32": 742982208,
+          "operation_ns": 1493
+        },
+        "h2d": {
+          "batch_ns": 32367,
+          "ns_per_byte_q32": 725143676,
+          "operation_ns": 1636
+        }
+      },
+      "transfer_provenance": {
+        "compute_capability": "8.6",
+        "cuda_driver": "13.0",
+        "cuda_runtime": "13.1",
+        "device": 0,
+        "gpu": "NVIDIA GeForce RTX 3090",
+        "suite": "transfer",
+        "transfer_repetitions": 9,
+        "transfer_warmup": 2,
+        "note": "ns_per_byte for d2h/h2d scaled x4 from the RunPod measurement (PCIe 4.0 x16) to the production link (PCIe 3.0 x8); latency terms and d2d unchanged"
+      }
+    }
+  ],
+  "schema_version": 2
+}

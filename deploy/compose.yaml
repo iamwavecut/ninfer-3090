@@ -68,10 +68,20 @@ services:
       - "4096"
       - --default-max-tokens
       - "16384"
+      # Measured on an RTX 3090 with ninfer_context_cost_bench (prefill suite on this artifact,
+      # transfer suite scaled to the PCIe 3.0 x8 link); the compiled defaults describe an RTX 5090.
+      - --context-cost-presets
+      - /etc/ninfer/context-cost-presets.json
     volumes:
       - type: bind
         source: ${NINFER_MODEL_PATH:?set the verified model artifact path}
         target: /models/qwen3_8_27b.ninfer
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./context-cost-presets.json
+        target: /etc/ninfer/context-cost-presets.json
         read_only: true
         bind:
           create_host_path: false
