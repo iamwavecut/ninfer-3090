@@ -37,16 +37,6 @@ void causal_attention_prompt_nvfp4_attention_launch(const Tensor&, const Tensor&
     reject_blackwell_kv();
 }
 
-void causal_attention_prompt_k8v4_launch(const Tensor&, const Tensor&, const Tensor&,
-                                         const Tensor&, const Tensor&, const Tensor&, float,
-                                         PagedKVBatchLayerView, Tensor&, cudaStream_t) {
-    reject_blackwell_kv();
-}
 
-void causal_attention_prompt_k8v4_attention_launch(const Tensor&, const Tensor&, float,
-                                                   const PagedKVLayerView&, Tensor&,
-                                                   cudaStream_t) {
-    reject_blackwell_kv();
-}
 
 } // namespace ninfer::ops::detail
