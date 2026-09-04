@@ -62,8 +62,10 @@ services:
       - overlay
       - --vision-max-merged
       - "12288"
+      # Startup-fixed pinned host memory. The engine never demotes KV to host at
+      # --max-concurrency 1, so this is reserve-only; the host has 62 GiB total.
       - --host-kv-mib
-      - "8192"
+      - "4096"
       - --default-max-tokens
       - "16384"
     volumes:
