@@ -60,7 +60,7 @@ if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
   add_library(ninfer_nvfp4_non_rdc STATIC
     ops/linear/nvfp4/nvfp4_w4a4_tma.cu
     ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_w4a4_tma.cu
-)
+    ops/softmax_attention/dense/causal_cache/prompt_nvfp4_non_rdc.cu)
   ninfer_internal_includes(ninfer_nvfp4_non_rdc)
   set_target_properties(ninfer_nvfp4_non_rdc PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF

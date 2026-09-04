@@ -1,10 +1,22 @@
 #pragma once
 
-// Asymmetric K8V4 causal prompt kernel. Q and cached K use the existing row-scaled E4M3
-// rotation and native FP8 Tensor Core path. Rotated V uses group-16 NVFP4, widens exactly to
-// FP16 for FP16/FP32 PV MMA, and the normalized result receives the FP32 inverse rotation.
+// NVFP4 causal prompt kernel. Both K and V are group-16 packed NVFP4, each widened to a wide
+// type before any MMA, since sm_86/sm_89 have no FP4 tensor-core path at all: K to BF16 for QK,
+// V to FP16 for PV (V's dequant-to-FP16 side was already portable -- NVFP4's only Blackwell
+// dependency was its value-only e2m1 encode, already fixed in nvfp4_codec.cuh; K needs the same
+// treatment now for QK). Q is never quantized (only the cache is NVFP4-coded) but still gets the
+// D256 Hadamard rotation, matching cached K's permanently-rotated storage; V is ALSO rotated, so
+// the normalized result receives the matching FP32 inverse rotation before it's written out (same
+// contract as this fork's K8V4 prompt kernel). This kernel never writes the cache itself
+// (kv_cache_append_batch_launch does that separately before it runs), so there is no
+// quantize-on-write path to preserve here.
+//
+// This replaces the upstream warp-specialized NVFP4 prompt kernel (setmaxnreg.{dec,inc}.sync.
+// aligned dynamic producer/consumer register reallocation), a genuine Hopper+ hardware feature
+// with no sm_86/sm_89 equivalent -- unlike the codec, that kernel wasn't portable by swapping one
+// instruction, so this is a fresh kernel following this fork's FP8/K8V4 prompt kernels' shape
+// instead.
 
-#include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
 #include "ops/kv_cache/nvfp4_group16_codec.cuh"
 #include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
@@ -17,80 +29,83 @@
 
 namespace ninfer::ops {
 
-inline constexpr int kCausalPromptK8V4Warps         = 16;
-inline constexpr int kCausalPromptK8V4Threads       = kCausalPromptK8V4Warps * 32;
-inline constexpr int kCausalPromptK8V4Br            = 64;
-inline constexpr int kCausalPromptK8V4Bc            = 64;
-inline constexpr int kCausalPromptK8V4DB16          = kCausalPromptHeadDim / 2;
-inline constexpr int kCausalPromptK8V4RowTiles      = kCausalPromptK8V4Br / 16;
-inline constexpr int kCausalPromptK8V4ProducerWarps = 2 * kCausalPromptK8V4RowTiles;
-inline constexpr int kCausalPromptK8V4DConsumers =
-    kCausalPromptK8V4Warps / kCausalPromptK8V4RowTiles;
+inline constexpr int kCausalPromptNvfp4Warps         = 16;
+inline constexpr int kCausalPromptNvfp4Threads       = kCausalPromptNvfp4Warps * 32;
+// A real dequantized BF16 copy of K beside its raw NVFP4 staging buffer, on top of a real
+// (unquantized) BF16 Q buffer, needs more shared memory per key than this fork's INT8/BF16 prompt
+// kernels budget for at their usual Br=Bc=64 tile size (same ~99KiB-per-block constraint as
+// prompt_fp8.cuh/prompt_k8v4.cuh; see their comments). Br=Bc=32 fits comfortably (~60KiB).
+inline constexpr int kCausalPromptNvfp4Br            = 32;
+inline constexpr int kCausalPromptNvfp4Bc            = 32;
+inline constexpr int kCausalPromptNvfp4RowTiles      = kCausalPromptNvfp4Br / 16;
+inline constexpr int kCausalPromptNvfp4ProducerWarps = 2 * kCausalPromptNvfp4RowTiles;
+inline constexpr int kCausalPromptNvfp4DConsumers =
+    kCausalPromptNvfp4Warps / kCausalPromptNvfp4RowTiles;
 
-inline constexpr int kCausalPromptK8V4QBytes = kCausalPromptK8V4Br * kCausalPromptHeadDim;
-inline constexpr int kCausalPromptK8V4QScaleBytes =
-    kCausalPromptK8V4Br * static_cast<int>(sizeof(float));
-inline constexpr int kCausalPromptK8V4KBytes = kCausalPromptK8V4Bc * kCausalPromptHeadDim;
-inline constexpr int kCausalPromptK8V4VBytes = kCausalPromptK8V4Bc * (kCausalPromptHeadDim / 2);
-inline constexpr int kCausalPromptK8V4VStageBytes =
-    kCausalPromptK8V4Bc * kCausalPromptHeadDim * static_cast<int>(sizeof(__half));
-inline constexpr int kCausalPromptK8V4PBytes =
-    kCausalPromptK8V4Br * kCausalPromptK8V4Bc * static_cast<int>(sizeof(__half));
-inline constexpr int kCausalPromptK8V4ScaleBytes =
-    kCausalPromptK8V4Bc * static_cast<int>(sizeof(__half)) +
-    kCausalPromptK8V4Bc * kKVCacheNvfp4Groups;
-inline constexpr int kCausalPromptK8V4StatsBytes =
-    7 * kCausalPromptK8V4Br * static_cast<int>(sizeof(float));
-inline constexpr int kCausalPromptK8V4SmemBytes =
-    kCausalPromptK8V4QBytes + kCausalPromptK8V4QScaleBytes + kCausalPromptK8V4KBytes +
-    kCausalPromptK8V4VBytes + kCausalPromptK8V4VStageBytes + kCausalPromptK8V4PBytes +
-    kCausalPromptK8V4ScaleBytes + kCausalPromptK8V4StatsBytes;
+inline constexpr int kCausalPromptNvfp4QBytes =
+    kCausalPromptNvfp4Br * kCausalPromptHeadDim * static_cast<int>(sizeof(__nv_bfloat16));
+inline constexpr int kCausalPromptNvfp4KRawBytes =
+    kCausalPromptNvfp4Bc * (kCausalPromptHeadDim / 2);
+inline constexpr int kCausalPromptNvfp4KBytes =
+    kCausalPromptNvfp4Bc * kCausalPromptHeadDim * static_cast<int>(sizeof(__nv_bfloat16));
+inline constexpr int kCausalPromptNvfp4VBytes = kCausalPromptNvfp4Bc * (kCausalPromptHeadDim / 2);
+inline constexpr int kCausalPromptNvfp4VStageBytes =
+    kCausalPromptNvfp4Bc * kCausalPromptHeadDim * static_cast<int>(sizeof(__half));
+inline constexpr int kCausalPromptNvfp4PBytes =
+    kCausalPromptNvfp4Br * kCausalPromptNvfp4Bc * static_cast<int>(sizeof(__half));
+inline constexpr int kCausalPromptNvfp4ScaleBytes =
+    2 * kCausalPromptNvfp4Bc * kKVCacheNvfp4Groups;
+inline constexpr int kCausalPromptNvfp4StatsBytes =
+    7 * kCausalPromptNvfp4Br * static_cast<int>(sizeof(float));
+inline constexpr int kCausalPromptNvfp4SmemBytes =
+    kCausalPromptNvfp4QBytes + kCausalPromptNvfp4KRawBytes + kCausalPromptNvfp4KBytes +
+    kCausalPromptNvfp4VBytes + kCausalPromptNvfp4VStageBytes + kCausalPromptNvfp4PBytes +
+    kCausalPromptNvfp4ScaleBytes + kCausalPromptNvfp4StatsBytes;
 
-static_assert(kCausalPromptK8V4DConsumers == 4);
-static_assert(kCausalPromptK8V4SmemBytes == 85120);
+static_assert(kCausalPromptNvfp4DConsumers == 8);
 
 template <typename Geometry, typename Metadata>
-__global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
+__global__ __maxnreg__(120) void causal_attention_prompt_nvfp4_kernel(
     const __nv_bfloat16* __restrict__ q, const std::uint8_t* __restrict__ cache_k,
-    const std::uint8_t* __restrict__ cache_v, const __half* __restrict__ cache_k_scale,
+    const std::uint8_t* __restrict__ cache_v, const std::uint8_t* __restrict__ cache_k_scale,
     const std::uint8_t* __restrict__ cache_v_scale, Metadata metadata,
     const std::int32_t* __restrict__ positions, float scale, __nv_bfloat16* __restrict__ out,
     std::int32_t width) {
     constexpr int D             = kCausalPromptHeadDim;
-    constexpr int Br            = kCausalPromptK8V4Br;
-    constexpr int Bc            = kCausalPromptK8V4Bc;
-    constexpr int DB16          = kCausalPromptK8V4DB16;
-    constexpr int QKKs          = D / 32;
+    constexpr int Br            = kCausalPromptNvfp4Br;
+    constexpr int Bc            = kCausalPromptNvfp4Bc;
+    constexpr int QKKs          = D / 16;
     constexpr int QKNt          = (Bc / 2) / 8;
-    constexpr int PVNtPerWarp   = D / (kCausalPromptK8V4DConsumers * 8);
+    constexpr int PVNtPerWarp   = D / (kCausalPromptNvfp4DConsumers * 8);
     constexpr int PVKs          = Bc / 16;
-    constexpr int ProducerWarps = kCausalPromptK8V4ProducerWarps;
-    constexpr int VWorkerWarps  = kCausalPromptK8V4Warps - ProducerWarps;
+    constexpr int ProducerWarps = kCausalPromptNvfp4ProducerWarps;
+    constexpr int VWorkerWarps  = kCausalPromptNvfp4Warps - ProducerWarps;
     constexpr int WorkerThreads = VWorkerWarps * 32;
     constexpr float Log2E       = 1.4426950408889634074f;
     constexpr unsigned FullMask = 0xffffffffU;
-    static_assert(QKKs == 8);
-    static_assert(PVNtPerWarp == 8);
+    static_assert(QKKs == 16);
+    static_assert(PVNtPerWarp == 4);
 
     extern __shared__ __align__(16) unsigned char smem_raw[];
-    std::uint8_t* q_fp8 = reinterpret_cast<std::uint8_t*>(smem_raw);
-    float* q_scale      = reinterpret_cast<float*>(q_fp8 + kCausalPromptK8V4QBytes);
-    std::uint8_t* k_fp8 = reinterpret_cast<std::uint8_t*>(
-        reinterpret_cast<unsigned char*>(q_scale) + kCausalPromptK8V4QScaleBytes);
-    std::uint8_t* v_nvfp4 = k_fp8 + kCausalPromptK8V4KBytes;
-    __half* v_f16         = reinterpret_cast<__half*>(v_nvfp4 + kCausalPromptK8V4VBytes);
-    __half* p_s           = reinterpret_cast<__half*>(reinterpret_cast<unsigned char*>(v_f16) +
-                                                      kCausalPromptK8V4VStageBytes);
-    __half* k_scale_s =
-        reinterpret_cast<__half*>(reinterpret_cast<unsigned char*>(p_s) + kCausalPromptK8V4PBytes);
-    std::uint8_t* v_scale_s = reinterpret_cast<std::uint8_t*>(k_scale_s + Bc);
-    float* running_m_s      = reinterpret_cast<float*>(v_scale_s + Bc * kKVCacheNvfp4Groups);
-    float* running_l_s      = running_m_s + Br;
-    float* partial_m_s      = running_l_s + Br;
-    float* partial_l_s      = partial_m_s + 2 * Br;
-    float* alpha_s          = partial_l_s + 2 * Br;
-    __nv_bfloat16* q_b16    = reinterpret_cast<__nv_bfloat16*>(q_fp8);
-    __nv_bfloat16* k_b16    = reinterpret_cast<__nv_bfloat16*>(k_fp8);
+    __nv_bfloat16* q_b16  = reinterpret_cast<__nv_bfloat16*>(smem_raw);
+    std::uint8_t* k_nvfp4 = reinterpret_cast<std::uint8_t*>(
+        reinterpret_cast<unsigned char*>(q_b16) + kCausalPromptNvfp4QBytes);
+    __nv_bfloat16* k_b16 =
+        reinterpret_cast<__nv_bfloat16*>(k_nvfp4 + kCausalPromptNvfp4KRawBytes);
+    std::uint8_t* v_nvfp4 = reinterpret_cast<std::uint8_t*>(
+        reinterpret_cast<unsigned char*>(k_b16) + kCausalPromptNvfp4KBytes);
+    __half* v_f16 = reinterpret_cast<__half*>(v_nvfp4 + kCausalPromptNvfp4VBytes);
+    __half* p_s   = reinterpret_cast<__half*>(reinterpret_cast<unsigned char*>(v_f16) +
+                                             kCausalPromptNvfp4VStageBytes);
+    std::uint8_t* k_scale_s = reinterpret_cast<std::uint8_t*>(
+        reinterpret_cast<unsigned char*>(p_s) + kCausalPromptNvfp4PBytes);
+    std::uint8_t* v_scale_s = k_scale_s + Bc * kKVCacheNvfp4Groups;
+    float* running_m_s =
+        reinterpret_cast<float*>(v_scale_s + Bc * kKVCacheNvfp4Groups);
+    float* running_l_s = running_m_s + Br;
+    float* partial_m_s = running_l_s + Br;
+    float* partial_l_s = partial_m_s + 2 * Br;
+    float* alpha_s     = partial_l_s + 2 * Br;
 
     const int q_block = static_cast<int>(blockIdx.x);
     const int q_head  = static_cast<int>(blockIdx.y);
@@ -103,7 +118,7 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
     if (q_head >= Geometry::QHeads || q0 >= width) return;
     if (q0 >= tokens) {
         causal_prompt_zero_output_rows<Geometry>(out, q_head, q0, min(q0 + Br, width), tid,
-                                                 kCausalPromptK8V4Threads);
+                                                 kCausalPromptNvfp4Threads);
         return;
     }
     const int base_pos              = positions[0];
@@ -112,9 +127,11 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
     const int max_query_abs         = base_pos + q0 + tile_rows - 1;
     const int key_blocks            = max_query_abs / Bc + 1;
 
-    for (int row = warp; row < Br; row += kCausalPromptK8V4Warps) {
+    // Q is never quantized -- only the cache is NVFP4-coded -- but the D256 rotation is a
+    // property of the stored (permanently rotated) K, so Q must be rotated the same way for Q.K
+    // to be correct; see the file comment.
+    for (int row = warp; row < Br; row += kCausalPromptNvfp4Warps) {
         float values[8];
-        float local_absmax = 0.0F;
 #pragma unroll
         for (int r = 0; r < 8; ++r) {
             const int d = lane + 32 * r;
@@ -125,17 +142,10 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
         }
         normalized_hadamard_d256_inplace(values, lane);
 #pragma unroll
-        for (int r = 0; r < 8; ++r) local_absmax = fmaxf(local_absmax, fabsf(values[r]));
-        const float absmax = warp_max(local_absmax, FullMask);
-        const float qs     = absmax > 0.0F ? absmax / kKVCacheFp8MaxFinite : 0.0F;
-        const float inv    = qs > 0.0F ? 1.0F / qs : 0.0F;
-#pragma unroll
         for (int r = 0; r < 8; ++r) {
             const int d = lane + 32 * r;
-            causal_prompt_store_byte_swizzled(q_fp8, row, d,
-                                              kv_cache_fp8_quant_code(values[r], inv));
+            q_b16[row * D + causal_prompt_swz(row, d)] = __float2bfloat16(values[r]);
         }
-        if (lane == 0) q_scale[row] = qs;
     }
     if (tid < Br) {
         running_m_s[tid] = -CUDART_INF_F;
@@ -152,29 +162,20 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
     const int b_rin    = lane & 7;
     const int b_koff   = ((lane >> 3) & 1) << 3;
 
-    float q_scale_r0 = 0.0F;
-    float q_scale_r1 = 0.0F;
-    if (warp < ProducerWarps) {
-        const int row0 = (warp >> 1) * 16 + gid;
-        const int row1 = row0 + 8;
-        q_scale_r0     = __shfl_sync(FullMask, lid == 0 ? q_scale[row0] : 0.0F, gid * 4);
-        q_scale_r1     = __shfl_sync(FullMask, lid == 0 ? q_scale[row1] : 0.0F, gid * 4);
-    }
-
     auto issue_kv_scales = [&](int tile_k0, int cooperative_tid, int cooperative_threads) {
         const int physical_page = block_table[tile_k0 >> kPagedKVPageShift];
         const int page_offset0  = tile_k0 & (kPagedKVPageSize - 1);
         for (int key_l = cooperative_tid; key_l < Bc; key_l += cooperative_threads) {
             const int key = tile_k0 + key_l;
             if (key <= max_query_abs) {
-                const std::int64_t k_off = kv_cache_fp8_scale_index<Geometry>(
-                    physical_page, kv_head, page_offset0 + key_l);
+                const std::int64_t k_off = kv_cache_nvfp4_scale_index<Geometry>(
+                    physical_page, kv_head, 0, page_offset0 + key_l);
                 const std::int64_t v_off = kv_cache_nvfp4_scale_index<Geometry>(
                     physical_page, kv_head, 0, page_offset0 + key_l);
-                k_scale_s[key_l] = cache_k_scale[k_off];
+                cp_async<16>(k_scale_s + key_l * kKVCacheNvfp4Groups, cache_k_scale + k_off);
                 cp_async<16>(v_scale_s + key_l * kKVCacheNvfp4Groups, cache_v_scale + v_off);
             } else {
-                k_scale_s[key_l] = __float2half_rn(0.0F);
+                store_vec(k_scale_s + key_l * kKVCacheNvfp4Groups, make_int4(0, 0, 0, 0));
                 store_vec(v_scale_s + key_l * kKVCacheNvfp4Groups, make_int4(0, 0, 0, 0));
             }
         }
@@ -184,32 +185,22 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
         const int physical_page = block_table[tile_k0 >> kPagedKVPageShift];
         const int page_offset0  = tile_k0 & (kPagedKVPageSize - 1);
 #pragma unroll 1
-        for (int chunk = cooperative_tid; chunk < Bc * (D / 16); chunk += cooperative_threads) {
-            const int key_l  = chunk / (D / 16);
-            const int dc     = chunk - key_l * (D / 16);
-            const int d      = dc * 16;
-            const int key    = tile_k0 + key_l;
-            std::uint8_t* kd = &k_fp8[(key_l * DB16 + causal_prompt_swz(key_l, dc * 8)) * 2];
-            if (key <= max_query_abs) {
-                const std::int64_t off = kv_cache_fp8_code_index<Geometry>(physical_page, kv_head,
-                                                                           d, page_offset0 + key_l);
-                cp_async<16, Cache::cg>(kd, &cache_k[off]);
-            } else {
-                store_vec(kd, make_int4(0, 0, 0, 0));
-            }
-        }
-#pragma unroll 1
         for (int chunk = cooperative_tid; chunk < Bc * (D / 32); chunk += cooperative_threads) {
             const int key_l  = chunk / (D / 32);
             const int dc     = chunk - key_l * (D / 32);
             const int d      = dc * 32;
             const int key    = tile_k0 + key_l;
+            std::uint8_t* kd = &k_nvfp4[key_l * (D / 2) + d / 2];
             std::uint8_t* vd = &v_nvfp4[key_l * (D / 2) + d / 2];
             if (key <= max_query_abs) {
-                const std::int64_t off = kv_cache_nvfp4_code_index<Geometry>(
+                const std::int64_t k_off = kv_cache_nvfp4_code_index<Geometry>(
                     physical_page, kv_head, d, page_offset0 + key_l);
-                cp_async<16, Cache::cg>(vd, &cache_v[off]);
+                const std::int64_t v_off = kv_cache_nvfp4_code_index<Geometry>(
+                    physical_page, kv_head, d, page_offset0 + key_l);
+                cp_async<16, Cache::cg>(kd, &cache_k[k_off]);
+                cp_async<16, Cache::cg>(vd, &cache_v[v_off]);
             } else {
+                store_vec(kd, make_int4(0, 0, 0, 0));
                 store_vec(vd, make_int4(0, 0, 0, 0));
             }
         }
@@ -221,8 +212,26 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
         issue_kv_codes(tile_k0, cooperative_tid, cooperative_threads);
     };
 
-    issue_kv_tile(0, tid, kCausalPromptK8V4Threads);
+    // Dequantizes the just-landed K tile (raw e2m1 codes in k_nvfp4, one E4M3 scale per 16-value
+    // group in k_scale_s) into the tensor-core-friendly BF16 layout QK reads via ldmatrix. All
+    // threads participate; callers must cp_wait<0>() first and __syncthreads() after.
+    auto dequant_k_tile = [&]() {
+#pragma unroll 1
+        for (int chunk = tid; chunk < Bc * (D / 8); chunk += kCausalPromptNvfp4Threads) {
+            const int key_l      = chunk / (D / 8);
+            const int dc         = chunk - key_l * (D / 8);
+            const int d          = dc * 8;
+            __nv_bfloat16* k_dst = &k_b16[key_l * D + causal_prompt_swz(key_l, d)];
+            store_vec(k_dst, kv_cache_nvfp4_dequant_bf16x8(
+                                 &k_nvfp4[key_l * (D / 2) + d / 2],
+                                 k_scale_s[key_l * kKVCacheNvfp4Groups + d / kKVCacheNvfp4Group]));
+        }
+    };
+
+    issue_kv_tile(0, tid, kCausalPromptNvfp4Threads);
     ninfer::ops::cp_wait<0>();
+    __syncthreads();
+    dequant_k_tile();
     __syncthreads();
 
     float acc[PVNtPerWarp][4];
@@ -248,7 +257,7 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
                 const int acol = kk * 16 + a_coloff;
                 unsigned af[4];
                 ldmatrix_x4(af[0], af[1], af[2], af[3],
-                            smem_addr(&q_b16[(row_base + a_rowoff) * DB16 +
+                            smem_addr(&q_b16[(row_base + a_rowoff) * D +
                                              causal_prompt_swz(row_base + a_rowoff, acol)]));
 #pragma unroll
                 for (int nt = 0; nt < QKNt; ++nt) {
@@ -256,23 +265,10 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
                     const int bcol = kk * 16 + b_koff;
                     unsigned bf[2];
                     ldmatrix_x2(bf[0], bf[1],
-                                smem_addr(&k_b16[brow * DB16 + causal_prompt_swz(brow, bcol)]));
-                    mma_fp8_e4m3(score[nt][0], score[nt][1], score[nt][2], score[nt][3], af[0],
-                                 af[1], af[2], af[3], bf[0], bf[1]);
+                                smem_addr(&k_b16[brow * D + causal_prompt_swz(brow, bcol)]));
+                    mma_bf16(score[nt][0], score[nt][1], score[nt][2], score[nt][3], af[0], af[1],
+                             af[2], af[3], bf[0], bf[1]);
                 }
-            }
-#pragma unroll
-            for (int nt = 0; nt < QKNt; ++nt) {
-                const int keya = col_base + nt * 8 + 2 * lid;
-                const int keyb = keya + 1;
-                float ks0      = gid == 0 ? __half2float(k_scale_s[keya]) : 0.0F;
-                float ks1      = gid == 0 ? __half2float(k_scale_s[keyb]) : 0.0F;
-                ks0            = __shfl_sync(FullMask, ks0, lid);
-                ks1            = __shfl_sync(FullMask, ks1, lid);
-                score[nt][0] *= q_scale_r0 * ks0;
-                score[nt][1] *= q_scale_r0 * ks1;
-                score[nt][2] *= q_scale_r1 * ks0;
-                score[nt][3] *= q_scale_r1 * ks1;
             }
 
             const int row0             = row_base + gid;
@@ -301,7 +297,7 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
                 partial_m_s[col_half * Br + row0] = bm0;
                 partial_m_s[col_half * Br + row1] = bm1;
             }
-            asm volatile("bar.sync 1, 256;" ::: "memory");
+            asm volatile("bar.sync 1, 128;" ::: "memory");
 
             bm0                     = fmaxf(partial_m_s[row0], partial_m_s[Br + row0]);
             bm1                     = fmaxf(partial_m_s[row1], partial_m_s[Br + row1]);
@@ -348,7 +344,7 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
                 partial_l_s[col_half * Br + row0] = bl0;
                 partial_l_s[col_half * Br + row1] = bl1;
             }
-            asm volatile("bar.sync 1, 256;" ::: "memory");
+            asm volatile("bar.sync 1, 128;" ::: "memory");
             if (col_half == 0 && lid == 0) {
                 const float tile_l0 = partial_l_s[row0] + partial_l_s[Br + row0];
                 const float tile_l1 = partial_l_s[row1] + partial_l_s[Br + row1];
@@ -381,10 +377,10 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
         __syncthreads();
 
         const bool has_next = kb + 1 < key_blocks;
-        if (has_next) issue_kv_tile((kb + 1) * Bc, tid, kCausalPromptK8V4Threads);
+        if (has_next) issue_kv_tile((kb + 1) * Bc, tid, kCausalPromptNvfp4Threads);
 
-        const int row_tile = warp % kCausalPromptK8V4RowTiles;
-        const int d_slice  = warp / kCausalPromptK8V4RowTiles;
+        const int row_tile = warp % kCausalPromptNvfp4RowTiles;
+        const int d_slice  = warp / kCausalPromptNvfp4RowTiles;
         const int row_base = row_tile * 16;
         const float alpha0 = alpha_s[row_base + gid];
         const float alpha1 = alpha_s[row_base + gid + 8];
@@ -415,12 +411,15 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
                         vf[0], vf[1]);
             }
         }
-        if (has_next) ninfer::ops::cp_wait<0>();
+        if (has_next) {
+            ninfer::ops::cp_wait<0>();
+            dequant_k_tile();
+        }
         __syncthreads();
     }
 
-    const int row_tile = warp % kCausalPromptK8V4RowTiles;
-    const int d_slice  = warp / kCausalPromptK8V4RowTiles;
+    const int row_tile = warp % kCausalPromptNvfp4RowTiles;
+    const int d_slice  = warp / kCausalPromptNvfp4RowTiles;
     const int row_base = row_tile * 16;
     const int row0     = row_base + gid;
     const int row1     = row0 + 8;
@@ -442,7 +441,7 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
     __syncthreads();
 
     // R is symmetric, but this application is the inverse/transpose semantic boundary.
-    for (int row = warp; row < tile_rows; row += kCausalPromptK8V4Warps) {
+    for (int row = warp; row < tile_rows; row += kCausalPromptNvfp4Warps) {
         float values[8];
 #pragma unroll
         for (int r = 0; r < 8; ++r) values[r] = rotated_out[row * D + lane + 32 * r];
@@ -456,7 +455,7 @@ __global__ __maxnreg__(120) void causal_attention_prompt_k8v4_kernel(
     __syncthreads();
 
     causal_prompt_zero_output_rows<Geometry>(out, q_head, tokens, min(q0 + Br, width), tid,
-                                             kCausalPromptK8V4Threads);
+                                             kCausalPromptNvfp4Threads);
 }
 
 } // namespace ninfer::ops

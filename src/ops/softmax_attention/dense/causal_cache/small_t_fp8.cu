@@ -3,7 +3,13 @@
 
 #include "core/device.h"
 #include "ops/common/math.h"
+// sm_86/sm_89 have no FP8 or NVFP4 tensor-core path, so the SM8X build takes the variant that
+// dequantizes the cache before ordinary MMA; every other architecture keeps upstream's kernel.
+#if defined(NINFER_SM8X_COMPAT)
+#include "ops/softmax_attention/dense/causal_cache/small_t_fp8_sm8x.cuh"
+#else
 #include "ops/softmax_attention/dense/causal_cache/small_t_fp8.cuh"
+#endif
 
 #include <cstdint>
 #include <stdexcept>
@@ -19,16 +25,19 @@ void launch_fp8_partial(const Tensor& q, CacheInput input, const Tensor& positio
     constexpr int RowCount             = TokenTile * Geometry::GroupSize;
     constexpr int RowTiles             = (RowCount + 15) / 16;
     constexpr int Warps                = RowTiles == 3 ? 12 : 8;
-    // KeyBlock=64 (used for TokenTile>1 on this fork's other small_t kernels) would need
-    // 6*64*256 = 96KiB of dynamic shared memory here on top of ~30KiB static (q_s/p_s/etc), since
-    // unlike those kernels this one keeps a real dequantized BF16 copy of K (not just V) beside
-    // its raw FP8 staging buffer -- over sm_86/sm_89's ~99KiB-per-block budget. KeyBlock=32 (this
-    // fork's existing T=1 configuration) keeps everything else about the kernel unchanged and
-    // fits comfortably (~78KiB total) at the cost of more, smaller key-tile iterations.
+#if defined(NINFER_SM8X_COMPAT)
+    // The dequantizing variant keeps a BF16 copy of K beside the raw tile, which only fits the
+    // ~99 KiB SM8X block budget at a 32-key tile.
     constexpr int KeyBlock             = 32;
+#else
+    constexpr int KeyBlock             = TokenTile == 1 ? 32 : 64;
+#endif
     constexpr int MinBlocks            = TokenTile == 1 ? 2 : 1;
-    // k_fp8(Bc*D) + k_b16(2*Bc*D) + v_fp8(Bc*D) + v_f16(2*Bc*D) = 6*Bc*D bytes.
+#if defined(NINFER_SM8X_COMPAT)
     constexpr std::size_t DynamicBytes = 6u * KeyBlock * kCausalHeadDim;
+#else
+    constexpr std::size_t DynamicBytes = 4u * KeyBlock * kCausalHeadDim;
+#endif
     using KernelInput                  = CacheInput;
     const dim3 grid(Geometry::KVHeads, splits, invocation.batch_size);
     const auto launch = [&]() {
