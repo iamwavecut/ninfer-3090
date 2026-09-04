@@ -55,8 +55,7 @@
         "gpu": "NVIDIA GeForce RTX 3090",
         "suite": "transfer",
         "transfer_repetitions": 9,
-        "transfer_warmup": 2,
-        "note": "ns_per_byte for d2h/h2d scaled x4 from the RunPod measurement (PCIe 4.0 x16) to the production link (PCIe 3.0 x8); latency terms and d2d unchanged"
+        "transfer_warmup": 2
       }
     }
   ],

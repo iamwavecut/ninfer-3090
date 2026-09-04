@@ -14,6 +14,12 @@ context window. `context-cost-presets.json` feeds the planner the RTX 3090's mea
 transfer costs (see `docs/performance.md`); without it the compiled RTX 5090 profile undervalues
 retained context by more than 2x and Host KV offload never pays off.
 
+Host memory is the scarce resource on this box (62 GiB shared with draw-api, asr-api and vLLM), so
+the service is sized to about 4 GiB of RSS: 1 GiB of pinned Host KV (parks ~130k `rk8v4` tokens),
+two Host StateImage slots (~147 MiB each), 256 MiB of media cache and 512 MiB of live media
+buffers, on top of the ~1.7 GiB the process itself needs. Raise `--host-kv-mib` only after the
+other tenants shrink.
+
 Copy `.env.example` to an untracked `.env`, replace the source/image placeholders, verify the model
 SHA-256, then run:
 
