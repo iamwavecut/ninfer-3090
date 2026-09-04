@@ -142,8 +142,6 @@ DeviceExecutionView DeviceContext::execution_view() const noexcept {
     return {.stream = stream, .multiprocessor_count = multiprocessor_count()};
 }
 
-int DeviceContext::sm_count() const noexcept { return props.multiProcessorCount; }
-
 std::size_t DeviceContext::total_vram() const noexcept { return props.totalGlobalMem; }
 
 void DeviceContext::synchronize() const { CUDA_CHECK(cudaStreamSynchronize(stream)); }

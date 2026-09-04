@@ -12,6 +12,21 @@
 
 namespace ninfer::ops::detail {
 
+// The launchers below keep the fork's BF16 and plain-INT8 variants next to the rotated one; the
+// engine routes only RotatedInt8KeyInt4ValueGroup64 here (see causal_softmax_attention.cpp).
+inline bool gqa_cache_is_int8(KvCacheStorage storage) noexcept {
+    return storage == KvCacheStorage::Int8Group64 ||
+           storage == KvCacheStorage::RotatedInt8KeyInt4ValueGroup64;
+}
+
+inline bool gqa_cache_is_rotated(KvCacheStorage storage) noexcept {
+    return storage == KvCacheStorage::RotatedInt8KeyInt4ValueGroup64;
+}
+
+inline DType gqa_cache_dtype(KvCacheStorage storage) noexcept {
+    return gqa_cache_is_int8(storage) ? DType::I8 : DType::BF16;
+}
+
 using GqaExecutionEnvelope = CausalAttentionExecutionEnvelope;
 
 enum class GqaAttentionRoute { SmallT, ChunkedSmallT, Prompt };

@@ -25,7 +25,7 @@ void gqa_attention_prompt_attention_launch_for(const Tensor& q, const Tensor& po
                              cudaFuncAttributeMaxDynamicSharedMemorySize, kGqaPrefillSmemBytes);
     CUDA_CHECK(attr_bf16);
     const auto tokens = static_cast<std::int32_t>(q.ne[2]);
-    if (cache.dtype == DType::I8) {
+    if (gqa_cache_is_int8(cache.storage)) {
         const dim3 attention_grid(static_cast<unsigned>(div_up(tokens, kGqaPrefillI8Br)),
                                   static_cast<unsigned>(Geometry::QHeads), 1u);
         const Tensor& cache_k_scale = cache.k_scale_pages;
@@ -45,7 +45,7 @@ void gqa_attention_prompt_attention_launch_for(const Tensor& q, const Tensor& po
                 static_cast<const std::int32_t*>(positions.data), scale,
                 static_cast<__nv_bfloat16*>(out.data), tokens);
         };
-        if (cache.packed_v) {
+        if (gqa_cache_is_rotated(cache.storage)) {
             launch_i8.template operator()<true, true, true>();
         } else {
             launch_i8.template operator()<false, false, false>();
@@ -62,7 +62,7 @@ void gqa_attention_prompt_attention_launch_for(const Tensor& q, const Tensor& po
                 static_cast<__nv_bfloat16*>(out.data), tokens);
     }
     CUDA_CHECK(cudaGetLastError());
-    if (cache.rotate_v) {
+    if (gqa_cache_is_rotated(cache.storage)) {
         gqa_kv_inverse_rotate_output_kernel<Geometry::QHeads>
             <<<tokens * Geometry::QHeads * kGqaKvQuantGroups, 32, 0, stream>>>(
                 static_cast<__nv_bfloat16*>(out.data), tokens, tokens, 0, nullptr);
@@ -76,7 +76,7 @@ void gqa_kv_append_launch_for(const Tensor& k, const Tensor& v, const Tensor& po
     const auto tokens = static_cast<std::int32_t>(k.ne[2]);
     Tensor& cache_k   = cache.k_pages;
     Tensor& cache_v   = cache.v_pages;
-    if (cache.dtype == DType::I8) {
+    if (gqa_cache_is_int8(cache.storage)) {
         Tensor& cache_k_scale    = cache.k_scale_pages;
         Tensor& cache_v_scale    = cache.v_scale_pages;
         constexpr int kFillBlock = 256;
@@ -115,7 +115,7 @@ void gqa_kv_append_launch_for(const Tensor& k, const Tensor& v, const Tensor& po
         }
         CUDA_CHECK(cudaGetLastError());
         };
-        if (cache.packed_v) {
+        if (gqa_cache_is_rotated(cache.storage)) {
             launch_fill.template operator()<true, true, true>();
         } else {
             launch_fill.template operator()<false, false, false>();
