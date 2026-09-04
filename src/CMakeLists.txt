@@ -294,7 +294,9 @@ if(CMAKE_CUDA_ARCHITECTURES MATCHES "^(86|89)$")
   # mma .kind::f8f6f4 encoding; SM8X serves FP8 weights through the A16 routes
   # and rejects the FP8 KV cache at startup.
   list(FILTER ninfer_ops_sources EXCLUDE REGEX "fp8/.+_a8\\.cu$")
-  list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/(small_t|prompt)_fp8\\.cu$")
+  # FP8 decode (small_t) runs on SM8X by dequantizing K to BF16 and V to FP16 before ordinary
+  # MMA; the FP8 prompt kernel still uses the Blackwell-only mma.sync kind::f8f6f4 QK path.
+  list(FILTER ninfer_ops_sources EXCLUDE REGEX "causal_cache/prompt_fp8\\.cu$")
   # NVFP4 decode and append run on SM8X: the e2m1 codec encodes in software through
   # __nv_fp4x2_e2m1 instead of Blackwell's cvt.rn.satfinite.e2m1x2. K8V4 still needs the FP8
   # mma.sync kind::f8f6f4 key path, and the NVFP4 prompt kernel is warp-specialized (setmaxnreg).

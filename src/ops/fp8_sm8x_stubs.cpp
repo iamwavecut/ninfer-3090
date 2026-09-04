@@ -49,20 +49,7 @@ void fp8_linear_swiglu_a8_launch(const Tensor&, const Weight&, Tensor&, Workspac
     reject_fp8_a8();
 }
 
-void causal_attention_small_t_fp8_launch(const Tensor&, const Tensor&, const Tensor&,
-                                         const Tensor&, const Tensor&, const Tensor&, float,
-                                         PagedKVBatchLayerView, CausalAttentionExecutionEnvelope,
-                                         std::int32_t, std::int32_t, Tensor&, Tensor&, Tensor&,
-                                         Tensor&, cudaStream_t) {
-    reject_fp8_a8();
-}
 
-void causal_attention_cached_small_t_fp8_launch(const Tensor&, const Tensor&, float,
-                                                const PagedKVLayerView&,
-                                                CausalAttentionExecutionEnvelope, Tensor&, Tensor&,
-                                                Tensor&, Tensor&, cudaStream_t) {
-    reject_fp8_a8();
-}
 
 void causal_attention_prompt_fp8_launch(const Tensor&, const Tensor&, const Tensor&, const Tensor&,
                                         const Tensor&, const Tensor&, float, PagedKVBatchLayerView,

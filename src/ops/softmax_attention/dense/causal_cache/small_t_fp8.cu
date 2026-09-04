@@ -19,9 +19,16 @@ void launch_fp8_partial(const Tensor& q, CacheInput input, const Tensor& positio
     constexpr int RowCount             = TokenTile * Geometry::GroupSize;
     constexpr int RowTiles             = (RowCount + 15) / 16;
     constexpr int Warps                = RowTiles == 3 ? 12 : 8;
-    constexpr int KeyBlock             = TokenTile == 1 ? 32 : 64;
+    // KeyBlock=64 (used for TokenTile>1 on this fork's other small_t kernels) would need
+    // 6*64*256 = 96KiB of dynamic shared memory here on top of ~30KiB static (q_s/p_s/etc), since
+    // unlike those kernels this one keeps a real dequantized BF16 copy of K (not just V) beside
+    // its raw FP8 staging buffer -- over sm_86/sm_89's ~99KiB-per-block budget. KeyBlock=32 (this
+    // fork's existing T=1 configuration) keeps everything else about the kernel unchanged and
+    // fits comfortably (~78KiB total) at the cost of more, smaller key-tile iterations.
+    constexpr int KeyBlock             = 32;
     constexpr int MinBlocks            = TokenTile == 1 ? 2 : 1;
-    constexpr std::size_t DynamicBytes = 4u * KeyBlock * kCausalHeadDim;
+    // k_fp8(Bc*D) + k_b16(2*Bc*D) + v_fp8(Bc*D) + v_f16(2*Bc*D) = 6*Bc*D bytes.
+    constexpr std::size_t DynamicBytes = 6u * KeyBlock * kCausalHeadDim;
     using KernelInput                  = CacheInput;
     const dim3 grid(Geometry::KVHeads, splits, invocation.batch_size);
     const auto launch = [&]() {

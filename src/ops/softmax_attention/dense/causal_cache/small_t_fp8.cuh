@@ -1,9 +1,15 @@
 #pragma once
 
 // Row-scaled E4M3FN split-KV causal attention for T=1..6. A CTA owns one KV head and
-// all of its GQA query heads, so every persistent K/V byte is streamed once. Q/K use
-// native E4M3 K32 MMA with FP32 accumulation; P and decoded V use FP16 MMA operands
-// with FP32 accumulation. Split numerators remain FP32 through the reducer.
+// all of its GQA query heads, so every persistent K/V byte is streamed once. Unlike this
+// fork's INT8 path (which keeps QK on native s8 Tensor Cores, since Ampere/Ada have INT8
+// tensor-core support), sm_86/sm_89 have no FP8 tensor-core path at all, so both K and V are
+// dequantized to wide types before any MMA: K to BF16 for QK, V to FP16 for PV, both with FP32
+// accumulation. Q is never quantized -- only the cache is FP8, so Q needs no codec at all -- but
+// it still gets the same D256 Hadamard rotation as cached K, since the cache stores K
+// permanently rotated (a property of the on-disk format, applied once when a row is written);
+// the dot product Q.K is only correct if Q is rotated by the same transform before it meets a
+// rotated K. Split numerators remain FP32 through the reducer.
 
 #include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
@@ -16,6 +22,25 @@
 #include <cstdint>
 
 namespace ninfer::ops {
+
+__device__ __forceinline__ int4 causal_small_t_fp8_dequant_bf16x8(const std::uint8_t* codes,
+                                                                   __half scale) {
+    const int2 raw          = load_vec<int2>(codes);
+    const std::uint16_t* c  = reinterpret_cast<const std::uint16_t*>(&raw);
+    const float scale_f     = __half2float(scale);
+    unsigned packed[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        __nv_fp8x2_e4m3 value;
+        value.__x                  = c[i];
+        const float2 decoded       = static_cast<float2>(value);
+        const __nv_bfloat162 value2 =
+            __floats2bfloat162_rn(decoded.x * scale_f, decoded.y * scale_f);
+        packed[i] = *reinterpret_cast<const unsigned*>(&value2);
+    }
+    return make_int4(static_cast<int>(packed[0]), static_cast<int>(packed[1]),
+                     static_cast<int>(packed[2]), static_cast<int>(packed[3]));
+}
 
 __device__ __forceinline__ int4 causal_small_t_fp8_dequant_f16x8(const std::uint8_t* codes,
                                                                  __half scale) {
@@ -47,9 +72,8 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
     constexpr int Br                   = RowTiles * 16;
     constexpr int Bc                   = KeyBlock;
     constexpr int D                    = kCausalHeadDim;
-    constexpr int DB16                 = D / 2;
     constexpr int Threads              = Wc * 32;
-    constexpr int QKKs                 = D / 32;
+    constexpr int QKKs                 = D / 16;
     constexpr int QKNt                 = Bc / 8;
     constexpr int PStride              = Bc == 32 ? 64 : Bc;
     constexpr int ConsumerWarpsPerTile = Wc / RowTiles;
@@ -66,17 +90,16 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
     static_assert(RowTiles >= 1 && RowTiles <= 3);
     static_assert(Wc > RowTiles && Wc % RowTiles == 0);
     static_assert(PVNtPerWarp == 4 || PVNtPerWarp == 8 || PVNtPerWarp == 16);
-    static_assert(QKKs == 8);
-    __shared__ __align__(16) std::uint8_t q_s[Br * D];
-    __shared__ __align__(16) std::uint8_t static_arena[DynamicArena ? 16 : 4 * Bc * D];
+    static_assert(QKKs == 16);
+    __shared__ __align__(16) __nv_bfloat16 q_s[Br * D];
+    __shared__ __align__(16) std::uint8_t static_arena[DynamicArena ? 16 : 6 * Bc * D];
     extern __shared__ __align__(16) std::uint8_t dynamic_arena[];
     std::uint8_t* arena  = DynamicArena ? dynamic_arena : static_arena;
-    float* q_scale_tmp   = reinterpret_cast<float*>(arena);
     std::uint8_t* k_fp8  = arena;
-    std::uint8_t* v_fp8  = arena + Bc * D;
-    __half* v_f16        = reinterpret_cast<__half*>(arena + 2 * Bc * D);
-    __nv_bfloat16* q_b16 = reinterpret_cast<__nv_bfloat16*>(q_s);
-    __nv_bfloat16* k_b16 = reinterpret_cast<__nv_bfloat16*>(k_fp8);
+    __nv_bfloat16* k_b16 = reinterpret_cast<__nv_bfloat16*>(arena + Bc * D);
+    std::uint8_t* v_fp8  = arena + 3 * Bc * D;
+    __half* v_f16        = reinterpret_cast<__half*>(arena + 4 * Bc * D);
+    __nv_bfloat16* q_b16 = q_s;
     __shared__ __align__(16) __half p_s[Br * PStride];
     __shared__ float alpha_s[Br];
     __shared__ __align__(16) __half k_scale_s[Bc];
@@ -240,16 +263,17 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
         __syncthreads();
     }
 
-    for (int index = tid; index < Br * D; index += Threads) q_s[index] = 0;
-    for (int row = tid; row < RowCount; row += Threads) q_scale_tmp[row] = 0.0F;
+    for (int index = tid; index < Br * D; index += Threads) q_s[index] = __float2bfloat16(0.0F);
     __syncthreads();
 
+    // Q is never quantized -- only the cache is FP8 -- but the D256 rotation is a property of
+    // the stored (permanently rotated) K, so Q must be rotated the same way for Q.K to be
+    // correct; see the file comment.
     for (int row = warp; row < RowCount; row += Wc) {
         int q_head = 0;
         int token  = 0;
         causal_small_t_tc_row_to_qt<Geometry>(row, TokenTile, kv_head, q_head, token);
         float values[8];
-        float local_absmax = 0.0F;
 #pragma unroll
         for (int r = 0; r < 8; ++r) {
             const int d = lane + 32 * r;
@@ -257,17 +281,10 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
         }
         normalized_hadamard_d256_inplace(values, lane);
 #pragma unroll
-        for (float value : values) local_absmax = fmaxf(local_absmax, fabsf(value));
-        const float absmax = warp_max(local_absmax, FullMask);
-        const float qs     = absmax > 0.0F ? absmax / kKVCacheFp8MaxFinite : 0.0F;
-        const float inv    = qs > 0.0F ? 1.0F / qs : 0.0F;
-#pragma unroll
         for (int r = 0; r < 8; ++r) {
             const int d = lane + 32 * r;
-            causal_small_t_store_byte_swizzled(q_s, row, d, DB16,
-                                               kv_cache_fp8_quant_code(values[r], inv));
+            q_s[row * D + causal_small_t_tc_swz(row, d)] = __float2bfloat16(values[r]);
         }
-        if (lane == 0) q_scale_tmp[row] = qs;
     }
     __syncthreads();
 
@@ -279,17 +296,6 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
     const int a_coloff = (a_mat >> 1) << 3;
     const int b_rin    = lane & 7;
     const int b_koff   = ((lane >> 3) & 1) << 3;
-
-    float q_scale_r0 = 0.0F;
-    float q_scale_r1 = 0.0F;
-    if (warp < RowTiles) {
-        const int row0 = warp * 16 + gid;
-        float qs0      = (lid == 0 && row0 < RowCount) ? q_scale_tmp[row0] : 0.0F;
-        float qs1      = (lid == 0 && row0 + 8 < RowCount) ? q_scale_tmp[row0 + 8] : 0.0F;
-        q_scale_r0     = __shfl_sync(FullMask, qs0, gid * 4);
-        q_scale_r1     = __shfl_sync(FullMask, qs1, gid * 4);
-    }
-    __syncthreads();
 
     float acc[PVNtPerWarp][4];
 #pragma unroll
@@ -335,7 +341,7 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
             const int dc        = chunk - key_l * (D / 16);
             const int d         = dc * 16;
             const int key       = tile_k0 + key_l;
-            std::uint8_t* k_dst = &k_fp8[(key_l * DB16 + causal_small_t_tc_swz(key_l, dc * 8)) * 2];
+            std::uint8_t* k_dst = &k_fp8[key_l * D + d];
             if (key >= split_start && key < split_end) {
                 const std::int64_t code_offset = kv_cache_fp8_code_index<Geometry>(
                     physical_page, kv_head, d, key & kPagedKVPageMask);
@@ -349,9 +355,26 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
         ninfer::ops::cp_commit();
     };
 
+    // Dequantizes the just-landed K tile (raw E4M3 codes in k_fp8, one scale per key in
+    // k_scale_s) into the tensor-core-friendly BF16 layout QK reads via ldmatrix. All threads
+    // participate; callers must cp_wait<0>() first and __syncthreads() after.
+    auto dequant_k_tile = [&]() {
+#pragma unroll 1
+        for (int chunk = tid; chunk < Bc * (D / 8); chunk += Threads) {
+            const int key_l      = chunk / (D / 8);
+            const int dc         = chunk - key_l * (D / 8);
+            const int d          = dc * 8;
+            __nv_bfloat16* k_dst = &k_b16[key_l * D + causal_small_t_tc_swz(key_l, d)];
+            store_vec(k_dst, causal_small_t_fp8_dequant_bf16x8(&k_fp8[key_l * D + d],
+                                                               k_scale_s[key_l]));
+        }
+    };
+
     int physical_page = physical_pages_s[0];
     issue_kv_tile(first_tile, physical_page);
     ninfer::ops::cp_wait<0>();
+    __syncthreads();
+    dequant_k_tile();
     __syncthreads();
 
     for (int kb = 0; kb < key_blocks; ++kb) {
@@ -365,35 +388,22 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                 score[nt][0] = score[nt][1] = score[nt][2] = score[nt][3] = 0.0F;
             }
 #pragma unroll
-            for (int kk = 0; kk < QKKs; ++kk) {
-                const int acol = kk * 16 + a_coloff;
+            for (int k = 0; k < QKKs; ++k) {
+                const int acol = k * 16 + a_coloff;
                 unsigned af[4];
                 ldmatrix_x4(af[0], af[1], af[2], af[3],
-                            smem_addr(&q_b16[(row_base + a_rowoff) * DB16 +
+                            smem_addr(&q_b16[(row_base + a_rowoff) * D +
                                              causal_small_t_tc_swz(row_base + a_rowoff, acol)]));
 #pragma unroll
                 for (int nt = 0; nt < QKNt; ++nt) {
                     const int brow = nt * 8 + b_rin;
-                    const int bcol = kk * 16 + b_koff;
+                    const int bcol = k * 16 + b_koff;
                     unsigned bf[2];
                     ldmatrix_x2(bf[0], bf[1],
-                                smem_addr(&k_b16[brow * DB16 + causal_small_t_tc_swz(brow, bcol)]));
-                    mma_fp8_e4m3(score[nt][0], score[nt][1], score[nt][2], score[nt][3], af[0],
-                                 af[1], af[2], af[3], bf[0], bf[1]);
+                                smem_addr(&k_b16[brow * D + causal_small_t_tc_swz(brow, bcol)]));
+                    mma_bf16(score[nt][0], score[nt][1], score[nt][2], score[nt][3], af[0], af[1],
+                             af[2], af[3], bf[0], bf[1]);
                 }
-            }
-#pragma unroll
-            for (int nt = 0; nt < QKNt; ++nt) {
-                const int keya = nt * 8 + 2 * lid;
-                const int keyb = keya + 1;
-                float ks0      = gid == 0 ? __half2float(k_scale_s[keya]) : 0.0F;
-                float ks1      = gid == 0 ? __half2float(k_scale_s[keyb]) : 0.0F;
-                ks0            = __shfl_sync(FullMask, ks0, lid);
-                ks1            = __shfl_sync(FullMask, ks1, lid);
-                score[nt][0] *= q_scale_r0 * ks0;
-                score[nt][1] *= q_scale_r0 * ks1;
-                score[nt][2] *= q_scale_r1 * ks0;
-                score[nt][3] *= q_scale_r1 * ks1;
             }
 
             const int row0 = row_base + gid;
@@ -532,7 +542,10 @@ __launch_bounds__(WarpsPerCta * 32, MinBlocksPerSm) __global__
                         vf[0], vf[1]);
             }
         }
-        if (has_next) { ninfer::ops::cp_wait<0>(); }
+        if (has_next) {
+            ninfer::ops::cp_wait<0>();
+            dequant_k_tile();
+        }
         __syncthreads();
     }
 
