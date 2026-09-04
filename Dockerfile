@@ -31,6 +31,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
+        curl \
         libavcodec60 \
         libavformat60 \
         libavutil58 \
