@@ -60,7 +60,7 @@ if(NINFER_BUILD_APPS OR BUILD_TESTING)
 endif()
 
 set(NINFER_BUILD_PROMPT_INPUT OFF)
-if(NINFER_BUILD_APPS)
+if(NINFER_BUILD_APPS OR BUILD_TESTING)
   set(NINFER_BUILD_PROMPT_INPUT ON)
 endif()
 
@@ -97,6 +97,12 @@ else()
   endif()
 endif()
 find_package(Threads REQUIRED)
+
+if(NINFER_BUILD_APPS OR BUILD_TESTING)
+  # Product operational logging is an offline, repository-pinned dependency. Core-only builds do
+  # not configure or link it.
+  add_subdirectory(third_party/spdlog)
+endif()
 
 # --- Subdirectories ----------------------------------------------------------
 add_subdirectory(src)

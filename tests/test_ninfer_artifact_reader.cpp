@@ -187,18 +187,11 @@ void test_common_validation() {
         expect_artifact_error([&] { Reader reader(fixture.path); }, "misaligned offset");
     }
     {
-        auto normative = normative_directory();
-        nlohmann::json directory{
-            {"model_id", "qwen3.6-27b"},
-            {"objects", normative.at("objects")},
+        constexpr std::array<std::uint8_t, 8> invalid_magic = {
+            'I', 'N', 'V', 'A', 'L', 'I', 'D', '!',
         };
-        auto fixture =
-            write_fixture(directory, "legacy_v1", ninfer::test::artifact_fixture::kV1Magic);
-        Reader reader(fixture.path);
-        if (reader.identity().model_id != "qwen3.6-27b" ||
-            reader.identity().weights_id != "groupwise-int") {
-            throw std::runtime_error("legacy v1 identity mapping mismatch");
-        }
+        auto fixture = write_fixture(normative_directory(), "invalid_magic", invalid_magic);
+        expect_artifact_error([&] { Reader reader(fixture.path); }, "invalid magic");
     }
 }
 

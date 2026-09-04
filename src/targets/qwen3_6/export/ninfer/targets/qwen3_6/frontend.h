@@ -16,12 +16,11 @@ namespace ninfer::targets::qwen3_6 {
 inline constexpr std::size_t kTokenDomain = 248077;
 
 struct FrontendOptions {
-    bool vision_enabled                         = true;
-    std::uint32_t max_context                   = 2'048;
-    std::size_t media_cache_bytes               = kDefaultMediaCacheBytes;
-    std::size_t media_live_bytes                = kDefaultMediaLiveBytes;
-    std::uint32_t media_preprocess_threads      = 0;
-    std::uint32_t max_cache_markers_per_request = 4;
+    bool vision_enabled                    = true;
+    std::uint32_t max_context              = 2'048;
+    std::size_t media_cache_bytes          = kDefaultMediaCacheBytes;
+    std::size_t media_live_bytes           = kDefaultMediaLiveBytes;
+    std::uint32_t media_preprocess_threads = 0;
     // Largest merged-token count one media item may occupy; larger media is downscaled at
     // preprocessing instead of being rejected. Zero leaves the artifact's pixel ceilings.
     std::uint32_t vision_max_merged_tokens = 16384;
@@ -113,6 +112,7 @@ public:
     [[nodiscard]] runtime::OutputDecision preview_terminal(FinishReason reason);
     [[nodiscard]] PublishedOutput commit_preview();
     [[nodiscard]] std::vector<GeneratedToolCall> take_tool_calls() noexcept;
+    [[nodiscard]] ToolCallParseDiagnostics tool_call_parse_diagnostics() const noexcept;
     [[nodiscard]] std::uint32_t reasoning_tokens() const noexcept;
     [[nodiscard]] ThinkingBudgetStats thinking_stats() const noexcept;
     [[nodiscard]] std::optional<std::string> matched_stop_string() const;

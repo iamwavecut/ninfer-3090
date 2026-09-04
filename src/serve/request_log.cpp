@@ -1,6 +1,8 @@
 #include "serve/request_log.h"
+#include "product/logging/pretty_format.h"
 #include "product/speculative_options.h"
-#include "serve/console_log.h"
+
+#include <spdlog/logger.h>
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
@@ -91,6 +93,15 @@ const char* finish_reason_name(ninfer::FinishReason reason) {
     return "unknown";
 }
 
+Json tool_call_parse_json(const ninfer::ToolCallParseDiagnostics& diagnostics) {
+    return Json{{"marker_seen", diagnostics.marker_seen},
+                {"structured_call_count", diagnostics.structured_call_count},
+                {"empty_arguments_omitted", diagnostics.empty_arguments_omitted},
+                {"schema_mismatch_arguments", diagnostics.schema_mismatch_arguments},
+                {"fallback_reason",
+                 ninfer::tool_call_parse_fallback_reason_name(diagnostics.fallback_reason)}};
+}
+
 std::string tool_choice_name(const ToolChoice& choice) {
     switch (choice.mode) {
     case ToolChoiceMode::Auto:
@@ -124,11 +135,6 @@ Json resolved_reasoning_effort_json(bool enable_thinking,
     return resolved ? Json(reasoning_effort_name(*resolved)) : Json(nullptr);
 }
 
-std::string
-requested_reasoning_effort_text(const std::optional<RequestedReasoningEffort>& requested) {
-    return requested ? std::string(requested_reasoning_effort_name(*requested)) : "default";
-}
-
 const char* kv_cache_name(ninfer::KvCacheStorage storage) {
     switch (storage) {
     case ninfer::KvCacheStorage::BFloat16:
@@ -139,6 +145,10 @@ const char* kv_cache_name(ninfer::KvCacheStorage storage) {
         return "rotated-k8-v4-group64";
     case ninfer::KvCacheStorage::Fp8E4M3Row256:
         return "fp8-e4m3-row256";
+    case ninfer::KvCacheStorage::Nvfp4Group16:
+        return "nvfp4";
+    case ninfer::KvCacheStorage::Fp8KeyNvfp4Value:
+        return "k8v4";
     }
     return "unknown";
 }
@@ -326,11 +336,7 @@ Json materialization_json(const ninfer::MaterializationDiagnostics& diagnostics)
         {"planning_elapsed_ns", diagnostics.planning_elapsed_ns},
         {"search_elapsed_ns", diagnostics.search_elapsed_ns},
         {"stop_reason", ninfer::materialization_stop_reason_name(diagnostics.stop_reason)},
-        {"model_optimal", diagnostics.model_optimal},
         {"budget_exhausted", diagnostics.budget_exhausted},
-        {"best_remaining_lower_bound_ns", diagnostics.best_remaining_lower_bound_ns},
-        {"absolute_bound_gap_ns", diagnostics.absolute_bound_gap_ns},
-        {"relative_bound_gap", diagnostics.relative_bound_gap},
         {"selected_degradation_units", diagnostics.selected_degradation_units},
         {"selected_maximal_fallback", diagnostics.selected_maximal_fallback},
     };
@@ -416,266 +422,7 @@ Json microseconds_per(std::uint64_t nanoseconds, std::uint64_t count) {
     return nanoseconds_to_microseconds(nanoseconds) / static_cast<double>(count);
 }
 
-// Tokens/second with fixed precision, or "n/a" when the interval is degenerate.
-std::string rate(double tokens, double seconds) {
-    std::ostringstream out;
-    if (seconds > 0.0 && tokens > 0.0) {
-        out << std::fixed << std::setprecision(1) << (tokens / seconds) << "tok/s";
-    } else {
-        out << "n/a";
-    }
-    return out.str();
-}
-
-std::string seconds_str(double seconds) {
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(2) << seconds << 's';
-    return out.str();
-}
-
-// Compact resolved-sampler summary. temperature <= 0 is the exact-argmax path.
-std::string sampler_str(const ninfer::ResolvedSamplingParameters& sampling) {
-    if (sampling.temperature <= 0.0f) { return "greedy"; }
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(2) << "temp=" << sampling.temperature
-        << " top_p=" << sampling.top_p << " top_k=" << sampling.top_k;
-    if (sampling.min_p > 0.0f) { out << " min_p=" << sampling.min_p; }
-    if (sampling.presence_penalty != 0.0f) { out << " pres=" << sampling.presence_penalty; }
-    if (sampling.frequency_penalty != 0.0f) { out << " freq=" << sampling.frequency_penalty; }
-    out << " seed=" << sampling.seed;
-    return out.str();
-}
-
-std::string speculative_str(const GenerationMetrics& metrics) {
-    if (metrics.speculative_backend == SpeculativeBackend::None) { return "off"; }
-    std::ostringstream out;
-    out << product::speculative_backend_name(metrics.speculative_backend) << ' ' << std::fixed
-        << std::setprecision(2);
-    if (metrics.speculative_rounds > 0) {
-        const double per_round = 1.0 + static_cast<double>(metrics.speculative_accepted_tokens) /
-                                           static_cast<double>(metrics.speculative_rounds);
-        out << per_round << "tok/round";
-    } else {
-        out << "n/a";
-    }
-    if (metrics.speculative_draft_tokens > 0) {
-        const double accept_pct = 100.0 * static_cast<double>(metrics.speculative_accepted_tokens) /
-                                  static_cast<double>(metrics.speculative_draft_tokens);
-        out << " (" << std::setprecision(1) << accept_pct << "%)";
-    }
-    return out.str();
-}
-
 } // namespace
-
-RequestLogContext make_request_log_context(std::uint64_t id, std::string protocol,
-                                           const GenerationRequest& request,
-                                           const RequestLogMetadata& metadata,
-                                           const PreparedRequest& prepared) {
-    RequestLogContext context;
-    context.id                                 = id;
-    context.protocol                           = std::move(protocol);
-    context.model                              = metadata.model;
-    context.stream                             = metadata.stream;
-    context.message_count                      = request.messages.size();
-    context.media_item_count                   = request.media_item_count();
-    context.requested_output_tokens            = request.max_tokens;
-    context.requested_output_tokens_client_set = metadata.output_tokens_explicit;
-    context.tool_count                         = request.tools.size();
-    context.tool_choice                        = request.tool_choice;
-    context.has_tool_history                   = request.has_tool_history();
-    context.enable_thinking                    = prepared.enable_thinking;
-    context.thinking_budget                    = prepared.thinking_budget;
-    context.requested_reasoning_effort         = request.reasoning_effort;
-    context.resolved_reasoning_effort          = prepared.effective_reasoning_effort;
-    context.preserve_thinking                  = prepared.preserve_thinking;
-    context.preserve_thinking_semantic_change  = metadata.preserve_thinking_semantic_change;
-    context.sampling                           = prepared.sampling;
-    context.acquisition_seconds                = prepared.acquisition_seconds;
-    context.preparation                        = prepared.preparation;
-    return context;
-}
-
-RequestRejectionLogContext make_request_rejection_log_context(std::uint64_t id,
-                                                              std::string protocol,
-                                                              const GenerationRequest& request,
-                                                              const RequestLogMetadata& metadata,
-                                                              ApiError error) {
-    RequestRejectionLogContext context;
-    context.id                                 = id;
-    context.protocol                           = std::move(protocol);
-    context.model                              = metadata.model;
-    context.stream                             = metadata.stream;
-    context.message_count                      = request.messages.size();
-    context.media_item_count                   = request.media_item_count();
-    context.requested_output_tokens            = request.max_tokens;
-    context.requested_output_tokens_client_set = metadata.output_tokens_explicit;
-    context.tool_count                         = request.tools.size();
-    context.tool_choice                        = request.tool_choice;
-    context.has_tool_history                   = request.has_tool_history();
-    context.requested_reasoning_effort         = request.reasoning_effort;
-    context.error                              = std::move(error);
-    return context;
-}
-
-std::string format_request_start(const RequestLogContext& context) {
-    std::ostringstream out;
-    out << "[req " << context.id << "] " << context.protocol << ' '
-        << (context.stream ? "stream" : "non-stream") << " msgs=" << context.message_count
-        << " max_tokens=" << context.requested_output_tokens << ' '
-        << (context.requested_output_tokens_client_set ? "(client)" : "(server default)")
-        << " tools=" << context.tool_count
-        << " tool_choice=" << tool_choice_name(context.tool_choice)
-        << " tool_history=" << (context.has_tool_history ? "yes" : "no")
-        << " thinking=" << (context.enable_thinking ? "on" : "off") << " reasoning_effort="
-        << requested_reasoning_effort_text(context.requested_reasoning_effort) << "->";
-    if (!context.enable_thinking) {
-        out << "none";
-    } else if (context.resolved_reasoning_effort) {
-        out << reasoning_effort_name(*context.resolved_reasoning_effort);
-    } else {
-        out << "n/a";
-    }
-    out << " preserve_thinking=" << (context.preserve_thinking ? "on" : "off")
-        << " preserve_change=" << (context.preserve_thinking_semantic_change ? "yes" : "no")
-        << " sampler=[" << sampler_str(context.sampling) << ']';
-    if (context.thinking_budget) { out << " thinking_budget=" << *context.thinking_budget; }
-    if (context.media_item_count != 0) {
-        out << " prepare=" << seconds_str(context.preparation.seconds)
-            << " acquire=" << seconds_str(context.acquisition_seconds)
-            << " media=" << seconds_str(context.preparation.media_preprocess_seconds) << '/'
-            << seconds_str(context.preparation.media_preprocess_work_seconds)
-            << " tokenize=" << seconds_str(context.preparation.tokenize_seconds)
-            << " media_cache=" << context.preparation.media_cache_hits << '/'
-            << context.preparation.media_cache_misses << '/'
-            << context.preparation.media_singleflight_waits;
-    }
-    out << " \xE2\x86\x92 submitted";
-    return out.str();
-}
-
-std::string format_request_rejected(const RequestRejectionLogContext& context) {
-    std::ostringstream out;
-    out << "[req " << context.id << "] rejected phase=prepare protocol=" << context.protocol << ' '
-        << (context.stream ? "stream" : "non-stream") << " msgs=" << context.message_count
-        << " media=" << context.media_item_count << " tools=" << context.tool_count
-        << " reasoning_effort="
-        << requested_reasoning_effort_text(context.requested_reasoning_effort) << "->unresolved"
-        << " status=" << context.error.status;
-    if (!context.error.code.empty()) { out << " code=" << context.error.code; }
-    out << " message=" << context.error.message;
-    return out.str();
-}
-
-std::string format_request_done(const RequestLogContext& context,
-                                const GenerationOutcome& outcome) {
-    const GenerationMetrics& metrics = outcome.metrics;
-    const double ttft_ms             = metrics.ttft_seconds * 1000.0;
-    // Prefill emits the first token; the remaining (gen - 1) come from decode.
-    const double decode_tokens =
-        outcome.completion_tokens > 0 ? static_cast<double>(outcome.completion_tokens - 1) : 0.0;
-    const double computed_prefill_tokens = static_cast<double>(
-        std::max(0, outcome.prompt_tokens - static_cast<int>(metrics.prefix_cache_hit_tokens)));
-
-    std::ostringstream out;
-    out << "[req " << context.id << "] done finish="
-        << (outcome.tool_calls.empty() ? finish_reason_name(outcome.finish_reason) : "tool_calls");
-    if (!outcome.tool_calls.empty()) { out << " tool_calls=" << outcome.tool_calls.size(); }
-    out << " prompt=" << outcome.prompt_tokens << " gen=" << outcome.completion_tokens
-        << " cache=" << metrics.prefix_cache_hit_tokens
-        << " reuse=" << prefix_reuse_path_name(metrics.prefix_reuse_path) << " ttft=" << std::fixed
-        << std::setprecision(0) << ttft_ms << "ms"
-        << " prefill=" << rate(computed_prefill_tokens, metrics.prefill_seconds)
-        << " decode=" << rate(decode_tokens, metrics.decode_seconds)
-        << " wall=" << seconds_str(metrics.total_seconds) << " host=" << std::setprecision(2)
-        << request_host_exposed_seconds(metrics.engine_timing) * 1000.0 << "ms";
-    if (metrics.overlay_windows != 0) {
-        const auto mib = [](std::size_t bytes) {
-            return static_cast<double>(bytes) / (1024.0 * 1024.0);
-        };
-        out << " overlay=" << metrics.overlay_windows << "x"
-            << (metrics.overlay_exclusive_windows == metrics.overlay_windows ? "excl"
-                : metrics.overlay_exclusive_windows == 0                     ? "conc"
-                                                                            : "mixed")
-            << " " << std::setprecision(0)
-            << metrics.overlay_window_seconds * 1000.0 << "ms (evict " << std::setprecision(0)
-            << mib(metrics.overlay_evicted_bytes) << "MiB " << std::setprecision(1)
-            << metrics.overlay_evict_seconds * 1000.0 << "ms, restore " << std::setprecision(1)
-            << metrics.overlay_restore_seconds * 1000.0 << "ms, staged " << std::setprecision(0)
-            << mib(metrics.overlay_staged_bytes) << "MiB)" << std::setprecision(2);
-    }
-    if (metrics.engine_timing.decode_rounds == 0) {
-        out << " decode-host=n/a wait=n/a";
-    } else {
-        const double rounds = static_cast<double>(metrics.engine_timing.decode_rounds);
-        out << " decode-host=" << std::setprecision(1)
-            << metrics.engine_timing.decode_host_exposed_seconds * 1.0e6 / rounds
-            << "us/round wait="
-            << metrics.engine_timing.decode_device_wait_exposed_seconds * 1.0e6 / rounds
-            << "us/round";
-    }
-    out << " speculative=" << speculative_str(metrics);
-    if (outcome.thinking.configured_budget) {
-        out << " thinking_budget=" << *outcome.thinking.configured_budget
-            << " model_thinking=" << outcome.thinking.model_thinking_tokens
-            << " control_tokens=" << outcome.thinking.injected_tokens
-            << " control=" << (outcome.thinking.applied ? "applied" : "unused");
-    }
-    return out.str();
-}
-
-std::string format_request_error(const RequestLogContext& context, const std::string& message) {
-    std::ostringstream out;
-    out << "[req " << context.id << "] error " << message;
-    return out.str();
-}
-
-std::string format_throughput(const ThroughputReport& report) {
-    const double prefill_rate =
-        report.interval_seconds > 0.0
-            ? static_cast<double>(report.computed_prefill_tokens) / report.interval_seconds
-            : 0.0;
-    const double decode_rate =
-        report.interval_seconds > 0.0
-            ? static_cast<double>(report.committed_decode_tokens) / report.interval_seconds
-            : 0.0;
-    const ninfer::RuntimeHostWorkStats host =
-        host_work_delta(report.previous.host_work, report.current.host_work);
-    std::ostringstream out;
-    out << "throughput interval=" << std::fixed << std::setprecision(3) << report.interval_seconds
-        << "s prefill=" << std::setprecision(1) << prefill_rate << "tok/s decode=" << decode_rate
-        << "tok/s running=" << report.current.running_requests
-        << " prefilling=" << report.current.prefilling_requests
-        << " decode_ready=" << report.current.decode_ready_requests
-        << " waiting=" << report.current.waiting_requests
-        << " materializing=" << report.current.materializing_requests
-        << " capture_pending=" << report.current.capture_pending_requests
-        << " terminal_pending=" << report.current.terminal_pending_requests << " avg_decode_batch=";
-    if (report.decode_rounds == 0) {
-        out << "n/a";
-    } else {
-        out << std::setprecision(2)
-            << static_cast<double>(report.decode_row_rounds) /
-                   static_cast<double>(report.decode_rounds);
-    }
-    out << " host=" << std::setprecision(2) << nanoseconds_to_seconds(host_active_ns(host)) * 1000.0
-        << "ms";
-    if (report.decode_rounds == 0) {
-        out << " decode-host=n/a wait=n/a";
-    } else {
-        out << " decode-host=" << std::setprecision(1)
-            << nanoseconds_to_microseconds(host.decode_host_ns) /
-                   static_cast<double>(report.decode_rounds)
-            << "us/round wait="
-            << nanoseconds_to_microseconds(host.decode_device_wait_ns) /
-                   static_cast<double>(report.decode_rounds)
-            << "us/round";
-    }
-    out << " boundary=" << std::setprecision(2)
-        << nanoseconds_to_seconds(host.engine_boundary_ns) * 1000.0
-        << "ms maintenance=" << nanoseconds_to_seconds(host.engine_maintenance_ns) * 1000.0 << "ms";
-    return out.str();
-}
 
 std::string format_server_start_json(
     const std::string& server_instance_id, std::uint64_t timestamp, const ServeOptions& options,
@@ -724,45 +471,44 @@ std::string format_server_start_json(
     const std::uint64_t total_device_state_slots =
         static_cast<std::uint64_t>(engine_options.max_concurrency) +
         cache.device_state_slots.value();
-    record["engine"] = Json{
-        {"device", engine_options.device},
-        {"max_context", engine_options.max_context},
-        {"kv_capacity_mode", kv_capacity_mode_name(memory.kv_capacity_mode)},
-        {"kv_capacity", memory.kv_capacity},
-        {"kv_capacity_page_groups", memory.kv_capacity_page_groups},
-        {"kv_capacity_max_page_groups", memory.kv_capacity_max_page_groups},
-        {"max_concurrency", engine_options.max_concurrency},
-        {"max_pending_requests", engine_options.max_pending_requests},
-        {"pending_timeout_ms", engine_options.pending_timeout_ms},
-        {"prefill_chunk", engine_options.prefill_chunk},
-        {"log_stats_interval_ms", options.log_stats_interval_ms},
-        {"kv_cache", kv_cache_name(engine_options.kv_cache)},
-        {"vision", engine_options.enable_vision},
-        {"cuda_graph", engine_options.use_cuda_graph},
-        {"prefix_reuse", options.allow_prefix_reuse},
-        {"speculative_backend",
-         product::speculative_backend_name(engine_options.speculative.backend)},
-        {"speculative_draft_window", engine_options.speculative.draft_tokens},
-        {"proposal_head", proposal_head_name(engine_options.speculative.proposal_head)},
-        {"context_cost", Json{{"transfer_source", ninfer::context_cost_preset_source_name(
-                                                      context_cost.transfer_source)},
-                              {"prefill_source", ninfer::context_cost_preset_source_name(
-                                                     context_cost.prefill_source)},
-                              {"hardware_class", context_cost.hardware_class},
-                              {"model_id", context_cost.model_id},
-                              {"weights_id", context_cost.weights_id},
-                              {"preset_path", context_cost.preset_path.string()}}},
-        {"context_cache",
-         Json{
-             {"enabled", cache.enabled},
-             {"device_state_slots", cache.device_state_slots.value()},
-             {"total_device_state_slots", total_device_state_slots},
-             {"host_state_slots", cache.host_state_slots},
-             {"host_kv_capacity_bytes", cache.host_kv_capacity_bytes},
-             {"max_private_continuations", cache.max_private_continuations.value()},
-             {"max_shared_prefixes", cache.max_shared_prefixes.value()},
-             {"max_long_anchors_per_continuation", cache.max_long_anchors_per_continuation.value()},
-             {"max_cache_markers_per_request", cache.max_cache_markers_per_request.value()}}}};
+    record["engine"] =
+        Json{{"device", engine_options.device},
+             {"max_context", engine_options.max_context},
+             {"kv_capacity_mode", kv_capacity_mode_name(memory.kv_capacity_mode)},
+             {"kv_capacity", memory.kv_capacity},
+             {"kv_capacity_page_groups", memory.kv_capacity_page_groups},
+             {"kv_capacity_max_page_groups", memory.kv_capacity_max_page_groups},
+             {"max_concurrency", engine_options.max_concurrency},
+             {"max_pending_requests", engine_options.max_pending_requests},
+             {"pending_timeout_ms", engine_options.pending_timeout_ms},
+             {"prefill_chunk", engine_options.prefill_chunk},
+             {"log_stats_interval_ms", options.log_stats_interval_ms},
+             {"kv_cache", kv_cache_name(engine_options.kv_cache)},
+             {"vision", engine_options.enable_vision},
+             {"cuda_graph", engine_options.use_cuda_graph},
+             {"prefix_reuse", options.allow_prefix_reuse},
+             {"speculative_backend",
+              product::speculative_backend_name(engine_options.speculative.backend)},
+             {"speculative_draft_window", engine_options.speculative.draft_tokens},
+             {"proposal_head", proposal_head_name(engine_options.speculative.proposal_head)},
+             {"context_cost", Json{{"transfer_source", ninfer::context_cost_preset_source_name(
+                                                           context_cost.transfer_source)},
+                                   {"prefill_source", ninfer::context_cost_preset_source_name(
+                                                          context_cost.prefill_source)},
+                                   {"hardware_class", context_cost.hardware_class},
+                                   {"model_id", context_cost.model_id},
+                                   {"weights_id", context_cost.weights_id},
+                                   {"preset_path", context_cost.preset_path.string()}}},
+             {"context_cache",
+              Json{{"enabled", cache.enabled},
+                   {"device_state_slots", cache.device_state_slots.value()},
+                   {"total_device_state_slots", total_device_state_slots},
+                   {"host_state_slots", cache.host_state_slots},
+                   {"host_kv_capacity_bytes", cache.host_kv_capacity_bytes},
+                   {"max_private_continuations", cache.max_private_continuations.value()},
+                   {"max_shared_prefixes", cache.max_shared_prefixes.value()},
+                   {"max_long_anchors_per_continuation",
+                    cache.max_long_anchors_per_continuation.value()}}}};
     record["sampling_defaults"] =
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},
@@ -839,7 +585,8 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
              {"model_thinking_tokens", outcome.thinking.model_thinking_tokens},
              {"thinking_control_tokens", outcome.thinking.injected_tokens},
              {"thinking_control_applied", outcome.thinking.applied},
-             {"tool_call_count", outcome.tool_calls.size()}};
+             {"tool_call_count", outcome.tool_calls.size()},
+             {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)}};
     record["timings_seconds"] = Json{
         {"prepare", outcome.metrics.prepare_seconds}, {"ttft", outcome.metrics.ttft_seconds},
         {"vision", outcome.metrics.vision_seconds},   {"prefill", outcome.metrics.prefill_seconds},
@@ -1082,8 +829,9 @@ ServerLogEnvironment query_server_log_environment(int device) {
 }
 
 JsonlRequestLog::JsonlRequestLog(const std::string& path,
-                                 const std::string& protected_artifact_path)
-    : path_(path) {
+                                 const std::string& protected_artifact_path,
+                                 std::shared_ptr<spdlog::logger> logger)
+    : path_(path), logger_(std::move(logger)) {
     if (path_.empty()) { return; }
     if (!protected_artifact_path.empty() &&
         normalized_absolute_path(path_) == normalized_absolute_path(protected_artifact_path)) {
@@ -1140,13 +888,20 @@ void JsonlRequestLog::write_throughput(const ThroughputReport& report) {
 }
 
 void JsonlRequestLog::append(std::string record) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (failed_) { return; }
-    output_ << record << '\n';
-    output_.flush();
-    if (!output_) {
-        failed_ = true;
-        write_console_log(ConsoleLogLevel::Error, "request JSONL logging failed for " + path_);
+    bool report_failure = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (failed_) { return; }
+        output_ << record << '\n';
+        output_.flush();
+        if (!output_) {
+            failed_        = true;
+            report_failure = true;
+        }
+    }
+    if (report_failure && logger_ != nullptr) {
+        logger_->error("request log disabled | write failed | {}",
+                       product::format_pretty_text(path_));
     }
 }
 

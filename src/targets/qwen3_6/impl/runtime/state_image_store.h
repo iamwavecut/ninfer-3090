@@ -384,18 +384,61 @@ public:
     }
 
     void abort_fork(StateImageHandle source, StateImageHandle destination) {
-        Object& source_object      = require(source);
-        Object& destination_object = require(destination);
-        if (source_object.role != StateImageRole::CheckpointImmutable ||
-            source_object.source_pins == 0 ||
-            destination_object.role != StateImageRole::ActiveMutable ||
-            !destination_object.device_slot || !destination_object.destination_pinned) {
+        if (!can_abort_fork(source, destination)) {
             throw std::logic_error("StateImage fork abort is invalid");
         }
+        Object& source_object      = require(source);
+        Object& destination_object = require(destination);
         --source_object.source_pins;
         destination_object.destination_pinned = false;
         destination_object.role               = StateImageRole::ReservedDestination;
         destination_object.content_epoch      = 0;
+    }
+
+    [[nodiscard]] bool can_abort_fork(StateImageHandle source,
+                                      StateImageHandle destination) const noexcept {
+        if (!valid(source) || !valid(destination)) { return false; }
+        const Object& source_object      = objects_[source.index_];
+        const Object& destination_object = objects_[destination.index_];
+        return source != destination && source_object.role == StateImageRole::CheckpointImmutable &&
+               source_object.source_pins != 0 &&
+               destination_object.role == StateImageRole::ActiveMutable &&
+               destination_object.device_slot.has_value() && destination_object.destination_pinned;
+    }
+
+    [[nodiscard]] bool
+    can_release_source_after_fork_abort(StateImageHandle source, StateImageHandle destination,
+                                        std::uint32_t released_checkpoint_references) const {
+        if (!can_abort_fork(source, destination)) { return false; }
+        const Object& object = require(source);
+        if (released_checkpoint_references > object.checkpoint_references) { return false; }
+        if (object.checkpoint_references != released_checkpoint_references) { return true; }
+        // abort_fork releases exactly the pin represented by this binding. Any other source pin
+        // still protects the object and therefore prevents terminal owner settlement.
+        if (object.source_pins != 1 || object.destination_pinned || has_pending_replica(object)) {
+            return false;
+        }
+        if (object.host_slot) {
+            if (host_ == nullptr) { return false; }
+            (void)host_->view(*object.host_slot);
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool
+    can_release_destination_after_fork_abort(StateImageHandle source, StateImageHandle destination,
+                                             std::uint32_t released_checkpoint_references) const {
+        if (!can_abort_fork(source, destination)) { return false; }
+        const Object& object = require(destination);
+        if (object.checkpoint_references != released_checkpoint_references ||
+            object.source_pins != 0 || has_pending_replica(object)) {
+            return false;
+        }
+        if (object.host_slot) {
+            if (host_ == nullptr) { return false; }
+            (void)host_->view(*object.host_slot);
+        }
+        return true;
     }
 
     [[nodiscard]] StateImageSelectors selectors(StateImageHandle source,
@@ -598,24 +641,43 @@ public:
     }
 
     [[nodiscard]] bool release(StateImageHandle handle) noexcept {
-        if (!valid(handle)) { return false; }
+        if (!can_release(handle)) { return false; }
         Object& object = objects_[handle.index_];
-        if (object.checkpoint_references != 0 || object.source_pins != 0 ||
-            object.destination_pinned || has_pending_replica(object)) {
-            return false;
+        if (object.host_slot) {
+            if (host_ == nullptr || !host_->release(*object.host_slot)) { return false; }
+            object.host_slot.reset();
         }
         if (object.device_slot) {
             return_device_slot(*object.device_slot);
             object.device_slot.reset();
         }
-        if (object.host_slot) {
-            if (host_ == nullptr || !host_->release(*object.host_slot)) { return false; }
-            object.host_slot.reset();
-        }
         object.role          = StateImageRole::Free;
         object.content_epoch = 0;
         if (++object.generation == 0) { ++object.generation; }
         free_objects_[free_object_count_++] = handle.index_;
+        return true;
+    }
+
+    [[nodiscard]] bool can_release(StateImageHandle handle) const noexcept {
+        if (!valid(handle)) { return false; }
+        const Object& object = objects_[handle.index_];
+        return object.checkpoint_references == 0 && object.source_pins == 0 &&
+               !object.destination_pinned && !has_pending_replica(object);
+    }
+
+    [[nodiscard]] bool
+    can_release_after_checkpoint_references(StateImageHandle handle,
+                                            std::uint32_t released_references) const {
+        const Object& object = require(handle);
+        if (released_references > object.checkpoint_references) { return false; }
+        if (object.checkpoint_references != released_references) { return true; }
+        if (object.source_pins != 0 || object.destination_pinned || has_pending_replica(object)) {
+            return false;
+        }
+        if (object.host_slot) {
+            if (host_ == nullptr) { return false; }
+            (void)host_->view(*object.host_slot);
+        }
         return true;
     }
 
@@ -716,10 +778,32 @@ inline StateImageTransfer::~StateImageTransfer() {
     if (owner_ != nullptr) { owner_->abort_transfer(std::move(*this)); }
 }
 
+enum class StateReadOwnership : std::uint8_t {
+    // The primary binding owns the direct StateImage lifetime.
+    Primary,
+    // The same active lineage retains the source through an optional checkpoint reference.
+    LineageCheckpoint,
+    // A retained private or shared owner outside this active lineage retains the source.
+    ExternalOwner,
+};
+
 struct ActiveStateBinding {
     StateImageHandle read;
     StateImageHandle write;
-    bool fork_pending = false;
+    bool fork_pending                 = false;
+    StateReadOwnership read_ownership = StateReadOwnership::Primary;
+
+    // A non-primary read source is pinned only for the pending Fork. Its allocation belongs to a
+    // surviving same-lineage checkpoint or external owner, never to the primary binding.
+    [[nodiscard]] bool borrows_read() const noexcept {
+        return read_ownership != StateReadOwnership::Primary;
+    }
+
+    // An external owner can be a retained private endpoint whose lifetime has no StateImage
+    // checkpoint reference, so refcount zero alone does not authorize this sequence to release it.
+    [[nodiscard]] bool read_has_external_owner() const noexcept {
+        return read_ownership == StateReadOwnership::ExternalOwner;
+    }
 };
 
 } // namespace ninfer::targets::qwen3_6::detail
