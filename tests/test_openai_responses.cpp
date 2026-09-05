@@ -982,6 +982,66 @@ int test_input_tokens_uses_shared_state_path() {
 
 } // namespace
 
+// A client that never sends previous_response_id or store=true (it resends its own growing
+// transcript every turn) can still name its conversation lineage via prompt_cache_key, which must
+// grant the retention a stored session gets without a retrievable Response object.
+int test_prompt_cache_key_retention() {
+    OpenAIResponsesStore store(16, 1ULL << 20);
+    const Json base = {{"model", "m"}, {"input", "hello"}};
+    int failures    = 0;
+
+    Json keyed                = base;
+    keyed["prompt_cache_key"] = "pi-session-1";
+    keyed["store"]            = false;
+    const OpenAIResponsesCreateRequest keyed_request =
+        parse_openai_responses_create_request(keyed, limits());
+    failures += check(keyed_request.prompt.prompt_cache_key == "pi-session-1",
+                      "prompt_cache_key reaches the wire-independent prompt");
+    const OpenAIResponsesResolvedPrompt keyed_resolved =
+        resolve_openai_responses_prompt(keyed_request.prompt, store, "resp_keyed_1", false);
+    failures += check(
+        keyed_resolved.cache_hints.session_key == "pi-session-1" &&
+            keyed_resolved.cache_hints.retention == ninfer::CacheRetentionHint::LiveSession &&
+            keyed_resolved.cache_hints.update_session_index && !keyed_resolved.session_key,
+        "prompt_cache_key grants LiveSession retention without store or a stored session_key");
+
+    Json unkeyed     = base;
+    unkeyed["store"] = false;
+    const OpenAIResponsesCreateRequest unkeyed_request =
+        parse_openai_responses_create_request(unkeyed, limits());
+    const OpenAIResponsesResolvedPrompt unkeyed_resolved =
+        resolve_openai_responses_prompt(unkeyed_request.prompt, store, "resp_unkeyed_1", false);
+    failures += check(!unkeyed_resolved.cache_hints.session_key &&
+                          unkeyed_resolved.cache_hints.retention ==
+                              ninfer::CacheRetentionHint::Disposable &&
+                          !unkeyed_resolved.cache_hints.update_session_index,
+                      "store=false with no prompt_cache_key stays Disposable");
+
+    Json empty_key                = base;
+    empty_key["prompt_cache_key"] = "";
+    failures += check(api_code([&] { parse_openai_responses_create_request(empty_key, limits()); }) ==
+                          400,
+                      "an empty prompt_cache_key is rejected");
+
+    const OpenAIResponseContext context =
+        append_openai_response_context({}, {text_turn(ninfer::ChatRole::User, "hi")});
+    store.put(stored_parent(context));
+    Json chained = {{"model", "m"},
+                    {"previous_response_id", "resp_parent"},
+                    {"prompt_cache_key", "pi-session-1"},
+                    {"input", "next"}};
+    const OpenAIResponsesCreateRequest chained_request =
+        parse_openai_responses_create_request(chained, limits());
+    const OpenAIResponsesResolvedPrompt chained_resolved =
+        resolve_openai_responses_prompt(chained_request.prompt, store, "resp_chained_1", false);
+    failures += check(
+        chained_resolved.session_key == "responses-session" &&
+            chained_resolved.cache_hints.retention == ninfer::CacheRetentionHint::Disposable &&
+            !chained_resolved.cache_hints.update_session_index,
+        "prompt_cache_key does not upgrade a store=false reply to an existing parent session");
+    return failures;
+}
+
 int main() {
     int failures = 0;
     failures += test_basic_request_and_resolution();
@@ -997,6 +1057,7 @@ int main() {
     failures += test_response_object();
     failures += test_sse_sequence_and_failures();
     failures += test_input_tokens_uses_shared_state_path();
+    failures += test_prompt_cache_key_retention();
     if (failures == 0) { std::cout << "ok\n"; }
     return failures == 0 ? 0 : 1;
 }

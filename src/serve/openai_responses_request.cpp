@@ -1168,6 +1168,13 @@ OpenAIResponsesCreateRequest parse_openai_responses_create_request(const Json& b
     apply_openai_prompt_cache_policy(parsed.prompt.generation, cache_policy);
     OpenAIResponsesCreateRequest out;
     out.prompt              = std::move(parsed.prompt);
+    if (body.contains("prompt_cache_key") && !body.at("prompt_cache_key").is_null()) {
+        std::string prompt_cache_key = body.at("prompt_cache_key").get<std::string>();
+        if (prompt_cache_key.empty()) {
+            bad_request("prompt_cache_key must not be empty", "prompt_cache_key");
+        }
+        out.prompt.prompt_cache_key = std::move(prompt_cache_key);
+    }
     out.tools               = std::move(parsed.wire_tools);
     out.tool_choice         = std::move(parsed.wire_tool_choice);
     out.tool_identities     = std::move(parsed.tool_identities);

@@ -185,10 +185,19 @@ resolve_openai_responses_prompt(const OpenAIResponsesPromptRequest& request,
         } else if (store_response) {
             resolved.session_key = *response_id;
         }
-        resolved.cache_hints.session_key = resolved.session_key;
-        resolved.cache_hints.retention =
-            store_response ? CacheRetentionHint::LiveSession : CacheRetentionHint::Disposable;
-        resolved.cache_hints.update_session_index = store_response;
+        // A client that keeps its own history (no previous_response_id, store=false) can still
+        // name its conversation lineage with prompt_cache_key, so its checkpoints are retained
+        // like a stored session's instead of being graded Disposable. A parent chain or a
+        // stored session keeps its behaviour: a stored parent consumed by a store=false reply
+        // stays Disposable and does not advance the session index.
+        const bool use_prompt_cache_key =
+            !parent_record && !store_response && request.prompt_cache_key.has_value();
+        resolved.cache_hints.session_key =
+            use_prompt_cache_key ? request.prompt_cache_key : resolved.session_key;
+        resolved.cache_hints.retention = store_response || use_prompt_cache_key
+                                             ? CacheRetentionHint::LiveSession
+                                             : CacheRetentionHint::Disposable;
+        resolved.cache_hints.update_session_index = store_response || use_prompt_cache_key;
     }
     return resolved;
 }
