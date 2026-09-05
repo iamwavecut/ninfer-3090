@@ -150,6 +150,14 @@ void launch_cyclic(const Tensor& k, const Tensor& v, const Tensor& positions, co
 
 void kv_cache_append_launch(const Tensor& k, const Tensor& v, const Tensor& positions,
                             PagedKVLayerView cache, cudaStream_t stream) {
+    if (cache.storage == KvCacheStorage::Fp8KeyNvfp4Value) {
+        kv_cache_append_k8v4_launch(k, v, positions, cache, stream);
+        return;
+    }
+    if (cache.storage == KvCacheStorage::Nvfp4Group16) {
+        kv_cache_append_nvfp4_launch(k, v, positions, cache, stream);
+        return;
+    }
     const PagedKVDirectMetadata metadata{static_cast<const std::int32_t*>(cache.block_table.data)};
     if (k.ne[1] == KVCacheAppendD256Kv4::KVHeads) {
         launch_full<KVCacheAppendD256Kv4>(k, v, positions, cache, metadata, stream);

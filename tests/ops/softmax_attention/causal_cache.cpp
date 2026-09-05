@@ -2197,11 +2197,9 @@ int run_batch_cases() {
                        {6, {61, 127, 511}, {6, 3, 0}, {2, 0, 1}, MappingPattern::Fragmented, 503u});
     failures += run_batch_case(kGeometries[1], KvCacheStorage::BFloat16,
                                {16, {49, 2041}, {16, 7}, {1, 0}, MappingPattern::Identity, 504u});
-#if !defined(NINFER_SM8X_COMPAT)
     failures +=
         run_batch_case(kGeometries[0], KvCacheStorage::Fp8E4M3Row256,
                        {6, {61, 127, 511}, {6, 3, 0}, {2, 0, 1}, MappingPattern::Fragmented, 505u});
-#endif
     return failures;
 }
 
@@ -2249,9 +2247,6 @@ int run_geometry(const Geometry& geometry) {
 
 int run_fp8_cases() {
     int failures = 0;
-#if defined(NINFER_SM8X_COMPAT)
-    return failures;
-#endif
     for (const Geometry& geometry : kGeometries) {
         failures += run_a1_case(geometry, KvCacheStorage::Fp8E4M3Row256, {65, 63, 192, 601u},
                                 MappingPattern::Fragmented);
@@ -2396,7 +2391,9 @@ int run_softmax_attention_nvfp4_tests() {
         return 77;
     }
 #if defined(NINFER_SM8X_COMPAT)
-    std::cout << "skip: NVFP4 and K8V4 KV attention require an sm_120a GPU\n";
+    // The batched decode case with a fragmented mapping (B=4, W=6) produces one wrong element on
+    // sm_86; the storage is rejected at planning time until the kernel is fixed there.
+    std::cout << "skip: NVFP4 KV attention is not qualified on sm_86/sm_89\n";
     return 0;
 #endif
     int failures = run_nvfp4_cases();
@@ -2412,10 +2409,6 @@ int run_softmax_attention_k8v4_tests() {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;
     }
-#if defined(NINFER_SM8X_COMPAT)
-    std::cout << "skip: NVFP4 and K8V4 KV attention require an sm_120a GPU\n";
-    return 0;
-#endif
     int failures = run_k8v4_cases();
     failures += run_quantized_batch_cases(KvCacheStorage::Fp8KeyNvfp4Value, 815u);
     failures += report_quantization_quality(KvCacheStorage::Fp8KeyNvfp4Value, 819u);
@@ -2435,10 +2428,10 @@ int run_softmax_attention_causal_cache_tests() {
     failures += run_nvfp4_cases();
     failures += run_quantized_batch_cases(KvCacheStorage::Nvfp4Group16, 720u);
     failures += report_quantization_quality(KvCacheStorage::Nvfp4Group16, 724u);
+#endif
     failures += run_k8v4_cases();
     failures += run_quantized_batch_cases(KvCacheStorage::Fp8KeyNvfp4Value, 815u);
     failures += report_quantization_quality(KvCacheStorage::Fp8KeyNvfp4Value, 819u);
-#endif
     for (const Geometry& geometry : kGeometries) { failures += run_geometry(geometry); }
     failures += run_fp8_cases();
     failures += run_batch_cases();

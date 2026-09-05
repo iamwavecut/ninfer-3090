@@ -8,7 +8,6 @@
 #include "ops/linear/fp8/fp8_a8_plan.h"
 #include "ops/linear_add/fp8/fp8_linear_add_plan.h"
 #include "ops/linear_swiglu/fp8/fp8_linear_swiglu_plan.h"
-#include "ops/softmax_attention/dense/causal_cache/launch.h"
 
 #include <stdexcept>
 
@@ -49,30 +48,8 @@ void fp8_linear_swiglu_a8_launch(const Tensor&, const Weight&, Tensor&, Workspac
     reject_fp8_a8();
 }
 
-void causal_attention_small_t_fp8_launch(const Tensor&, const Tensor&, const Tensor&,
-                                         const Tensor&, const Tensor&, const Tensor&, float,
-                                         PagedKVBatchLayerView, CausalAttentionExecutionEnvelope,
-                                         std::int32_t, std::int32_t, Tensor&, Tensor&, Tensor&,
-                                         Tensor&, cudaStream_t) {
-    reject_fp8_a8();
-}
 
-void causal_attention_cached_small_t_fp8_launch(const Tensor&, const Tensor&, float,
-                                                const PagedKVLayerView&,
-                                                CausalAttentionExecutionEnvelope, Tensor&, Tensor&,
-                                                Tensor&, Tensor&, cudaStream_t) {
-    reject_fp8_a8();
-}
 
-void causal_attention_prompt_fp8_launch(const Tensor&, const Tensor&, const Tensor&, const Tensor&,
-                                        const Tensor&, const Tensor&, float, PagedKVBatchLayerView,
-                                        Tensor&, cudaStream_t) {
-    reject_fp8_a8();
-}
 
-void causal_attention_prompt_fp8_attention_launch(const Tensor&, const Tensor&, float,
-                                                  const PagedKVLayerView&, Tensor&, cudaStream_t) {
-    reject_fp8_a8();
-}
 
 } // namespace ninfer::ops::detail

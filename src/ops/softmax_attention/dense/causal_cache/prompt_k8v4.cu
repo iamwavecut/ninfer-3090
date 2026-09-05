@@ -4,7 +4,13 @@
 #include "core/device.h"
 #include "ops/common/math.h"
 #include "ops/kv_cache/append/launch.h"
+// sm_86/sm_89 have no FP8 or NVFP4 tensor-core path, so the SM8X build takes the variant that
+// dequantizes the cache before ordinary MMA; every other architecture keeps upstream's kernel.
+#if defined(NINFER_SM8X_COMPAT)
+#include "ops/softmax_attention/dense/causal_cache/prompt_k8v4_sm8x.cuh"
+#else
 #include "ops/softmax_attention/dense/causal_cache/prompt_k8v4.cuh"
+#endif
 
 #include <cstdint>
 

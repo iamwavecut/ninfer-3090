@@ -194,7 +194,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--prefill-chunk N` | positive text-prefill chunk, in multiples of 128 | `1024` |
 | `--max-new N` | requested output-token limit | `128` |
 | `--device N` | CUDA device index | `0` |
-| `--kv-dtype bf16\|int8\|rk8v4\|fp8\|nvfp4\|k8v4` | KV-cache storage; `rk8v4` is experimental and lossy, `fp8`, `nvfp4` and `k8v4` need a Blackwell build | `bf16` |
+| `--kv-dtype bf16\|int8\|rk8v4\|fp8\|nvfp4\|k8v4` | KV-cache storage; `rk8v4` is experimental and lossy. On sm_86/sm_89 `fp8` and `k8v4` run through kernels that dequantize the cache before ordinary MMA (see docs/performance.md); `nvfp4` is rejected there until its batched decode kernel is qualified | `bf16` |
 | `--spec mtp\|dflash` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5`; DFlash `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |

@@ -59,23 +59,20 @@ std::uint32_t page_count(std::uint32_t capacity) {
     return 1U + (capacity - 1U) / static_cast<std::uint32_t>(kPagedKVPageSize);
 }
 
-void require_kv_cache_storage_supported(KvCacheStorage storage) {
+// The NVFP4 KV cache is not qualified on sm_86/sm_89: its batched decode kernel fails the
+// fragmented-mapping correctness case in tests/ops/softmax_attention/causal_cache.cpp on this
+// build (one element off by two orders of magnitude). K8V4 keeps NVFP4 values and passes.
+void require_kv_cache_storage_qualified(KvCacheStorage storage) {
 #if defined(NINFER_SM8X_COMPAT)
-    switch (storage) {
-    case KvCacheStorage::Fp8E4M3Row256:
-    case KvCacheStorage::Nvfp4Group16:
-    case KvCacheStorage::Fp8KeyNvfp4Value:
+    if (storage == KvCacheStorage::Nvfp4Group16) {
         throw std::invalid_argument(
-            "FP8 and NVFP4 KV caches require Blackwell mma support; use int8 or rk8v4 on SM8X");
-    case KvCacheStorage::BFloat16:
-    case KvCacheStorage::Int8Group64:
-    case KvCacheStorage::RotatedInt8KeyInt4ValueGroup64:
-        break;
+            "KV-cache storage 'nvfp4' is not qualified on sm_86/sm_89; use k8v4, int8 or rk8v4");
     }
 #else
     (void)storage;
 #endif
 }
+
 
 template <class ProfileAllowance>
 std::size_t graph_topology_allowance(const std::vector<GraphExecutionProfile>& profiles,
@@ -665,7 +662,6 @@ void validate_target_options(DeviceContext& device, const EngineOptions& options
         throw std::invalid_argument(
             "Qwen3.6 family runtime requires compute capability 8.6 or 8.9");
     }
-    require_kv_cache_storage_supported(options.kv_cache);
 }
 
 std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlanningInputs& inputs,
@@ -758,6 +754,7 @@ std::unique_ptr<qwen3_6::detail::SequencePlannerImpl<Variant>>
 make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
                            WeightsProfile weights_profile) {
     validate_target_options(device, options);
+    require_kv_cache_storage_qualified(options.kv_cache);
     SequencePlanningInputs inputs{
         .weights_profile     = weights_profile,
         .capacity            = options.max_context,
