@@ -19,6 +19,28 @@ of Host KV (parks ~520k `rk8v4` tokens of finished prefixes for reuse), two Host
 (~147 MiB each), 256 MiB of media cache and 512 MiB of live media buffers, on top of the ~1.7 GiB
 the process itself needs: about 7 GiB of RSS.
 
+## Why `rk8v4`
+
+Perplexity of every KV storage on the fixed `ninfer-ppl-1m-v1` quick corpus (4,096-token context,
+2,048-token stride, 261,167 scored tokens, `groupwise-int` Qwen3.8-27B, RTX 3090, sm_86 build), next
+to the largest explicit `--kv-capacity` that boots with this profile on a 24 GiB card:
+
+| `--kv-dtype` | perplexity | against `bf16` | overlay-vision maximum |
+|---|---|---|---|
+| `bf16` | 4.342690 | — | 88,064 |
+| `int8` | 4.343263 | +0.013% | 180,224 |
+| `rk8v4` | 4.346027 | +0.077% | 237,568 |
+| `k8v4` | 4.348400 | +0.131% | 237,568 |
+| `fp8` | 4.345732 | +0.070% | 184,320 |
+| `nvfp4` | 4.358745 | +0.370% | 262,144 (model cap) |
+
+`rk8v4` (rotated INT8 keys, rotated packed INT4 values) buys 32% more context than `int8` for
++0.077% perplexity and beats `k8v4` on both axes; `nvfp4` reaches the model cap at +0.370%. The
+GPU2 profile therefore keeps `rk8v4` and spends the capacity on the 203,200-token window beside the
+resident embedder. A 32-value scale group for the packed values (as in ashalliants' unrotated port,
+where it halves the penalty) was measured here at 4.345997: the value rotation already spreads the
+outliers, so the finer group buys 0.0007% for 2% more KV bytes and was not adopted.
+
 Copy `.env.example` to an untracked `.env`, replace the source/image placeholders, verify the model
 SHA-256, then run:
 
