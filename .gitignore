@@ -70,3 +70,6 @@ dist/*
 
 # Claude Code personal/local settings (may contain API tokens)
 .claude/settings.local.json
+
+# Binaries staged for deploy/Dockerfile.prebuilt
+deploy/prebuilt/

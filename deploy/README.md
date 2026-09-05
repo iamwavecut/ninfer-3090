@@ -14,11 +14,10 @@ context window. `context-cost-presets.json` feeds the planner the RTX 3090's mea
 transfer costs (see `docs/performance.md`); without it the compiled RTX 5090 profile undervalues
 retained context by more than 2x and Host KV offload never pays off.
 
-Host memory is the scarce resource on this box (62 GiB shared with draw-api, asr-api and vLLM), so
-the service is sized to about 4 GiB of RSS: 1 GiB of pinned Host KV (parks ~130k `rk8v4` tokens),
-two Host StateImage slots (~147 MiB each), 256 MiB of media cache and 512 MiB of live media
-buffers, on top of the ~1.7 GiB the process itself needs. Raise `--host-kv-mib` only after the
-other tenants shrink.
+Host memory is shared with draw-api, asr-api and vLLM on this 62 GiB box. The service pins 4 GiB
+of Host KV (parks ~520k `rk8v4` tokens of finished prefixes for reuse), two Host StateImage slots
+(~147 MiB each), 256 MiB of media cache and 512 MiB of live media buffers, on top of the ~1.7 GiB
+the process itself needs: about 7 GiB of RSS.
 
 Copy `.env.example` to an untracked `.env`, replace the source/image placeholders, verify the model
 SHA-256, then run:
@@ -29,6 +28,19 @@ docker compose up -d ninfer-3090
 ./register-discovery.sh
 ./smoke-protocols.sh
 ```
+
+The AI Farm does not compile NInfer. Build `ninfer` and `ninfer-serve` on a rented RTX 3090 pod
+from the exact commit with the Dockerfile's configuration (`Release`, apps on, tests and
+benchmarks off, CUDA 13.1 toolkit on Ubuntu 24.04), boot the production command line there, copy
+the two binaries into `deploy/prebuilt/`, and assemble the image on the farm without a compiler:
+
+```bash
+docker build -f deploy/Dockerfile.prebuilt -t "$NINFER_IMAGE" .
+docker compose up -d --no-build ninfer-3090
+```
+
+`Dockerfile.prebuilt` is the runtime stage of the root `Dockerfile` with the binaries copied from
+`deploy/prebuilt/` instead of the build stage.
 
 The service is published on loopback, the explicit AI Farm LAN address, and the AI Farm Tailscale
 address. Discovery reaches it as `http://ninfer-3090:8080`; agent clients use either routed address.

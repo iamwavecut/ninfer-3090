@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# Runtime stage of the root Dockerfile, fed with binaries compiled elsewhere (see deploy/README.md).
+FROM nvidia/cuda:13.1.2-runtime-ubuntu24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        curl \
+        libavcodec60 \
+        libavformat60 \
+        libavutil58 \
+        libcurl4t64 \
+        libswscale7 \
+    && rm -rf /var/lib/apt/lists/*
+
+# GeForce cards do not support CUDA forward compatibility; the compat libraries would make every
+# CUDA call fail at startup (see the root Dockerfile).
+RUN rm -rf /usr/local/cuda-13.1/compat /usr/local/cuda-13/compat /usr/local/cuda/compat
+
+COPY --chmod=0755 deploy/prebuilt/ninfer /usr/local/bin/ninfer
+COPY --chmod=0755 deploy/prebuilt/ninfer-serve /usr/local/bin/ninfer-serve
+
+WORKDIR /workspace
+EXPOSE 8080
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["ninfer-serve"]
+CMD ["--help"]

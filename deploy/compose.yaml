@@ -63,10 +63,10 @@ services:
       - --vision-max-merged
       - "12288"
       # Startup-fixed pinned host memory on a 62 GiB host shared with other services.
-      # Host RAM budget for this instance is 4 GiB in total: pinned KV 1 GiB (~130k parked rk8v4
-      # tokens), two host StateImage slots, and small media buffers; the rest is CUDA/runtime.
+      # Pinned Host KV 4 GiB parks about 520k rk8v4 tokens of finished prefixes for reuse; with two
+      # host StateImage slots and the media buffers the instance sizes to about 7 GiB of RSS.
       - --host-kv-mib
-      - "1024"
+      - "4096"
       - --host-state-slots
       - "2"
       - --media-cache-mib
