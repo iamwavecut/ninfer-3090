@@ -14,7 +14,7 @@ English reference text, English long-form text, Chinese reference text, and NInf
 ./build/apps/ninfer-perplexity models/qwen3_8_27b_nvfp4.ninfer \
   --corpus eval/corpora/perplexity-1m/manifest.json \
   --quick \
-  --kv-dtype fp8
+  --kv-dtype int8
 ```
 
 The default evaluation uses a 4,096-token context and a 2,048-token stride. Use `--context` and
