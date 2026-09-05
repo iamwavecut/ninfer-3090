@@ -59,20 +59,6 @@ std::uint32_t page_count(std::uint32_t capacity) {
     return 1U + (capacity - 1U) / static_cast<std::uint32_t>(kPagedKVPageSize);
 }
 
-// The NVFP4 KV cache is not qualified on sm_86/sm_89: its batched decode kernel fails the
-// fragmented-mapping correctness case in tests/ops/softmax_attention/causal_cache.cpp on this
-// build (one element off by two orders of magnitude). K8V4 keeps NVFP4 values and passes.
-void require_kv_cache_storage_qualified(KvCacheStorage storage) {
-#if defined(NINFER_SM8X_COMPAT)
-    if (storage == KvCacheStorage::Nvfp4Group16) {
-        throw std::invalid_argument(
-            "KV-cache storage 'nvfp4' is not qualified on sm_86/sm_89; use k8v4, int8 or rk8v4");
-    }
-#else
-    (void)storage;
-#endif
-}
-
 
 template <class ProfileAllowance>
 std::size_t graph_topology_allowance(const std::vector<GraphExecutionProfile>& profiles,
@@ -754,7 +740,6 @@ std::unique_ptr<qwen3_6::detail::SequencePlannerImpl<Variant>>
 make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
                            WeightsProfile weights_profile) {
     validate_target_options(device, options);
-    require_kv_cache_storage_qualified(options.kv_cache);
     SequencePlanningInputs inputs{
         .weights_profile     = weights_profile,
         .capacity            = options.max_context,

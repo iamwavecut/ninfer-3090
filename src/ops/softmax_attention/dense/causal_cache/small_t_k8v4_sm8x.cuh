@@ -621,6 +621,8 @@ __launch_bounds__(256) __global__ void causal_attention_small_t_k8v4_reduce_outp
         __syncthreads();
     }
     const float head_m = reduce_or_weight[0];
+    // Every thread must have read head_m before the buffer is reused for local_l below.
+    __syncthreads();
 
     float local_l = 0.0F;
     for (int split = tid; split < active_splits; split += 256) {
@@ -640,6 +642,8 @@ __launch_bounds__(256) __global__ void causal_attention_small_t_k8v4_reduce_outp
         __syncthreads();
     }
     const float head_l = reduce_or_weight[0];
+    // Same for head_l: threads below active_splits overwrite the buffer with their weights next.
+    __syncthreads();
     if (tid < active_splits) {
         const float tile_l =
             partial_l[causal_partial_stat_index<Geometry>(q_head, token, tid, tokens)];

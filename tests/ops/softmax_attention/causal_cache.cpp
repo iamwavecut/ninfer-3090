@@ -2390,12 +2390,6 @@ int run_softmax_attention_nvfp4_tests() {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;
     }
-#if defined(NINFER_SM8X_COMPAT)
-    // The batched decode case with a fragmented mapping (B=4, W=6) produces one wrong element on
-    // sm_86; the storage is rejected at planning time until the kernel is fixed there.
-    std::cout << "skip: NVFP4 KV attention is not qualified on sm_86/sm_89\n";
-    return 0;
-#endif
     int failures = run_nvfp4_cases();
     failures += run_quantized_batch_cases(KvCacheStorage::Nvfp4Group16, 720u);
     failures += report_quantization_quality(KvCacheStorage::Nvfp4Group16, 724u);
@@ -2424,11 +2418,9 @@ int run_softmax_attention_causal_cache_tests() {
     }
 
     int failures = verify_workspace_capacity_contract();
-#if !defined(NINFER_SM8X_COMPAT)
     failures += run_nvfp4_cases();
     failures += run_quantized_batch_cases(KvCacheStorage::Nvfp4Group16, 720u);
     failures += report_quantization_quality(KvCacheStorage::Nvfp4Group16, 724u);
-#endif
     failures += run_k8v4_cases();
     failures += run_quantized_batch_cases(KvCacheStorage::Fp8KeyNvfp4Value, 815u);
     failures += report_quantization_quality(KvCacheStorage::Fp8KeyNvfp4Value, 819u);
