@@ -1019,9 +1019,9 @@ int test_prompt_cache_key_retention() {
 
     Json empty_key                = base;
     empty_key["prompt_cache_key"] = "";
-    failures += check(api_code([&] { parse_openai_responses_create_request(empty_key, limits()); }) ==
-                          400,
-                      "an empty prompt_cache_key is rejected");
+    failures += check(
+        api_error([&] { parse_openai_responses_create_request(empty_key, limits()); }).status == 400,
+        "an empty prompt_cache_key is rejected");
 
     const OpenAIResponseContext context =
         append_openai_response_context({}, {text_turn(ninfer::ChatRole::User, "hi")});
