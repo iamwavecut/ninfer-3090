@@ -63,12 +63,17 @@ services:
       - --vision-max-merged
       - "12288"
       # Startup-fixed pinned host memory on a 62 GiB host shared with other services.
-      # Pinned Host KV 4 GiB parks about 520k rk8v4 tokens of finished prefixes for reuse; with two
-      # host StateImage slots and the media buffers the instance sizes to about 7 GiB of RSS.
+      # Pinned Host KV 12 GiB parks about 1.5M rk8v4 tokens of finished prefixes; eight host
+      # StateImage slots (~147 MiB each) let an agent loop keep a checkpoint per turn instead of
+      # churning through two. The instance sizes to about 16 GiB of RSS.
       - --host-kv-mib
-      - "4096"
+      - "12288"
       - --host-state-slots
-      - "2"
+      - "8"
+      # The materialization planner's search budget. Its upstream cap of 5 ms exhausts on
+      # multimodal 100k-token prompts and commits plans it rates at minutes of future loss.
+      - --materialization-search-ms
+      - "100"
       - --media-cache-mib
       - "256"
       - --media-live-mib

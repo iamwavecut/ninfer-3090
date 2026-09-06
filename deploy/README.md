@@ -14,10 +14,13 @@ context window. `context-cost-presets.json` feeds the planner the RTX 3090's mea
 transfer costs (see `docs/performance.md`); without it the compiled RTX 5090 profile undervalues
 retained context by more than 2x and Host KV offload never pays off.
 
-Host memory is shared with draw-api, asr-api and vLLM on this 62 GiB box. The service pins 4 GiB
-of Host KV (parks ~520k `rk8v4` tokens of finished prefixes for reuse), two Host StateImage slots
+Host memory is shared with draw-api, asr-api and vLLM on this 62 GiB box. The service pins 12 GiB
+of Host KV (parks ~1.5M `rk8v4` tokens of finished prefixes for reuse), eight Host StateImage slots
 (~147 MiB each), 256 MiB of media cache and 512 MiB of live media buffers, on top of the ~1.7 GiB
-the process itself needs: about 7 GiB of RSS.
+the process itself needs: about 16 GiB of RSS. `--materialization-search-ms 100` lifts the
+placement planner's search budget from its 5 ms default: on 100k-token multimodal agent prompts
+the default exhausted after 15 candidates and dropped the previous turn's checkpoint, turning
+every turn into a three-minute cold prefill.
 
 ## Why `rk8v4`
 
