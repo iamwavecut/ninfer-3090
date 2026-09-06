@@ -112,10 +112,12 @@ services:
       - "${NINFER_LAN_IP:?set the AI Farm LAN IP}:${NINFER_HOST_PORT:-18086}:8080"
       - "${NINFER_TAILSCALE_IP:?set the AI Farm Tailscale IP}:${NINFER_HOST_PORT:-18086}:8080"
     healthcheck:
+      # /health answers 503 as soon as the engine has failed; three misses let autoheal recreate
+      # the container within about half a minute instead of the ten minutes sixty retries took.
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 10s
       timeout: 3s
-      retries: 60
+      retries: 3
       start_period: 300s
     stop_grace_period: 30s
     read_only: true
