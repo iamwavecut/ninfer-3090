@@ -9,6 +9,7 @@ services:
     image: ${NINFER_IMAGE:?set an immutable local or registry image reference}
     container_name: ninfer-3090
     labels:
+      autoheal: "true"
       com.aifarm.service: ninfer-3090
       com.aifarm.role: service
       com.aifarm.service-revision: ${NINFER_SOURCE_REVISION:?set the exact 40-hex source commit}
