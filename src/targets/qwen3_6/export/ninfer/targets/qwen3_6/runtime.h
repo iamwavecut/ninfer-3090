@@ -779,6 +779,8 @@ struct MaterializationResult {
     std::vector<MaterializationSharedVictimResult> shared_victims;
     std::vector<runtime::ContextTransferObservation> transfer_observations;
     runtime::ContextOperationCounts operations;
+    // Nonempty on Aborted when a context-cache store rejected the placement; names the store.
+    std::string failure;
 };
 
 template <class Variant>

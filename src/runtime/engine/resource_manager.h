@@ -218,6 +218,7 @@ public:
         ContextTransactionStatus status = ContextTransactionStatus::Aborted;
         std::optional<PublishedActivation> activation;
         MaterializationDiagnostics diagnostics;
+        std::string failure;
     };
 
     enum class MaterializationReserveResult : std::uint8_t {
@@ -2889,7 +2890,7 @@ private:
             lanes_[record->destination.value] = LogicalLaneState::Free;
             transaction_.template emplace<std::monostate>();
             program.finalize_context_transaction();
-            return {.status = ContextTransactionStatus::Aborted};
+            return {.status = ContextTransactionStatus::Aborted, .failure = result.failure};
         }
 
         CatalogEntry& publication = catalog_[record->publication_slot];

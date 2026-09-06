@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -500,6 +501,19 @@ struct PromptInput {
     ContextCacheHints context_cache;
 };
 
+// A context-cache store (Device or Host StateImage slots, Host KV extents, Paged KV pages, transfer
+// lanes) could not honor a placement the planner had already accounted for. Materialization aborts,
+// only the affected request fails (Overloaded), and the Engine keeps serving. Derives from
+// std::bad_alloc so existing exhaustion handling keeps working; what() names the exhausted store.
+class ContextCacheExhausted final : public std::bad_alloc {
+public:
+    explicit ContextCacheExhausted(std::string message) : message_(std::move(message)) {}
+    [[nodiscard]] const char* what() const noexcept override { return message_.c_str(); }
+
+private:
+    std::string message_;
+};
+
 enum class RequestErrorKind : std::uint8_t {
     ContextLengthExceeded,
     ThinkingBudgetCapacityInsufficient,
@@ -883,6 +897,8 @@ struct RuntimeStats {
     std::uint32_t terminal_pending_requests = 0;
     std::uint64_t active_captures_completed = 0;
     std::uint64_t active_captures_aborted   = 0;
+    // Materializations aborted because a context-cache store rejected the placement.
+    std::uint64_t context_cache_exhausted_requests = 0;
 
     std::uint64_t root_selections                    = 0;
     std::uint64_t private_endpoint_selections        = 0;

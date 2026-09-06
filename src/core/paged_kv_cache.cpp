@@ -2,6 +2,7 @@
 
 #include "core/device.h"
 #include "core/host_kv_arena.h"
+#include "ninfer/types.h"
 
 #include <algorithm>
 #include <limits>
@@ -337,7 +338,9 @@ bool DeviceKVPagePool::can_resize_reservation(const DeviceKVPageReservation& res
 
 void DeviceKVPagePool::resize_reservation(DeviceKVPageReservation& reservation,
                                           std::uint32_t new_reserved_pages) {
-    if (!can_resize_reservation(reservation, new_reserved_pages)) { throw std::bad_alloc(); }
+    if (!can_resize_reservation(reservation, new_reserved_pages)) {
+        throw ContextCacheExhausted("Paged KV pool cannot resize the page reservation");
+    }
     reserved_pages_    = reserved_pages_ - reservation.pages_ + new_reserved_pages;
     reservation.pages_ = new_reserved_pages;
 }
@@ -728,7 +731,9 @@ reserve_device_kv_page_bundle(std::span<const DeviceKVPageReservationRequest> re
                 throw std::invalid_argument("Paged KV bundle names the same pool twice");
             }
         }
-        if (request.pages > request.pool->available_pages()) { throw std::bad_alloc(); }
+        if (request.pages > request.pool->available_pages()) {
+            throw ContextCacheExhausted("Paged KV pool has fewer free pages than the reservation");
+        }
     }
 
     std::vector<DeviceKVPageReservation> reservations;

@@ -1508,7 +1508,15 @@ private:
                                 "aborted materialization retained an activation");
                         }
                         materializing_.reset();
-                        complete_detached_cancelled(request);
+                        if (!terminal.failure.empty()) {
+                            ++cumulative_stats_.context_cache_exhausted_requests;
+                            complete_error(request, std::make_exception_ptr(RequestError(
+                                                        RequestErrorKind::Overloaded,
+                                                        "context cache exhausted: " +
+                                                            terminal.failure)));
+                        } else {
+                            complete_detached_cancelled(request);
+                        }
                         request_admission_check();
                         publish_runtime_stats();
                         return AdmissionProgress::ControlProgress;
