@@ -25,6 +25,7 @@ inline constexpr std::size_t kMaximumPromptMediaBytes    = 256ULL << 20;
 inline constexpr std::size_t kDefaultMediaCacheBytes     = 1ULL << 30;
 inline constexpr std::size_t kDefaultMediaLiveBytes      = 2ULL << 30;
 inline constexpr std::uint32_t kDefaultHostStateSlots    = 8;
+inline constexpr std::uint64_t kDefaultMaterializationSearchBudgetNs = 5'000'000;
 inline constexpr std::size_t kDefaultHostKvCapacityBytes = 8ULL << 30;
 
 enum class KvCacheStorage : std::uint8_t {
@@ -138,6 +139,9 @@ struct ContextCacheOptions {
     std::optional<std::uint32_t> max_private_continuations;
     std::optional<std::uint32_t> max_shared_prefixes;
     std::optional<std::uint32_t> max_long_anchors_per_continuation;
+    // Wall-clock cap on the materialization planner's search per admission decision. The planner
+    // still stops earlier at 5% of the incumbent plan's predicted cost.
+    std::uint64_t materialization_search_budget_ns = kDefaultMaterializationSearchBudgetNs;
 };
 
 struct ContextCostOptions {

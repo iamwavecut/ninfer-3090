@@ -269,6 +269,10 @@ public:
         }
     }
 
+    void set_materialization_search_budget_ns(std::uint64_t budget_ns) noexcept {
+        planner_.set_search_budget_ns(budget_ns);
+    }
+
     [[nodiscard]] Inspection inspect(Program& program, const PreparedPrompt& prompt,
                                      const RequestBasePlan& base, std::uint64_t publication_order) {
         if (!std::holds_alternative<std::monostate>(transaction_) ||

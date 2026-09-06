@@ -317,6 +317,23 @@ int main() {
               "serve help omits --no-prefix-reuse");
     failures += check(serve_usage_text("ninfer-serve").find("--host-kv-mib") != std::string::npos,
                       "serve help omits context-cache capacities");
+    failures += check(serve_usage_text("ninfer-serve").find("--materialization-search-ms") !=
+                          std::string::npos,
+                      "serve help omits --materialization-search-ms");
+    const ServeOptions planner_budget =
+        parse({"ninfer-serve", "model.ninfer", "--materialization-search-ms", "100"});
+    failures += check(planner_budget.context_cache.materialization_search_budget_ns ==
+                          100ULL * 1'000'000ULL,
+                      "--materialization-search-ms did not reach the context-cache options");
+    failures += check(parse({"ninfer-serve", "model.ninfer"})
+                              .context_cache.materialization_search_budget_ns ==
+                          ninfer::kDefaultMaterializationSearchBudgetNs,
+                      "materialization search budget default is not 5 ms");
+    bool zero_planner_budget_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--materialization-search-ms", "0"});
+    } catch (const std::invalid_argument&) { zero_planner_budget_rejected = true; }
+    failures += check(zero_planner_budget_rejected, "--materialization-search-ms 0 must be rejected");
     failures += check(serve_usage_text("ninfer-serve").find("device-state=max-concurrency") !=
                           std::string::npos,
                       "serve help omits context-cache defaults");

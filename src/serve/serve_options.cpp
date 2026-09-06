@@ -76,7 +76,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--media-preprocess-threads N] "
            "[--device-state-slots N] [--host-state-slots N] [--host-kv-mib N] "
            "[--max-private-continuations N] [--max-shared-prefixes N] "
-           "[--max-long-anchors-per-continuation N] "
+           "[--max-long-anchors-per-continuation N] [--materialization-search-ms N] "
            "[--request-log-jsonl FILE] "
            "[--response-store-max-records N] [--response-store-max-mib N] "
            "[--kv-dtype bf16|int8|rk8v4|fp8|nvfp4|k8v4] [--spec mtp|dflash --draft-tokens N] "
@@ -105,6 +105,8 @@ std::string serve_usage_text(const char* argv0) {
            "device memory per image\n"
            "       --vision-max-merged bounds the merged tokens of one media item (default 16384); "
            "larger media is downscaled\n"
+           "       --materialization-search-ms caps the placement planner's search per admission "
+           "(default 5)\n"
            "       --kv-capacity auto leaves " +
            std::to_string(kDefaultKvCapacityHeadroomBytes / (1024ULL * 1024ULL)) +
            " MiB of sizing headroom\n"
@@ -239,6 +241,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 static_cast<std::uint32_t>(parse_nonnegative_int(
                     require_value("--max-shared-prefixes"), "max-shared-prefixes"));
             context_capacity_explicit = true;
+        } else if (arg == "--materialization-search-ms") {
+            const std::uint64_t ms = parse_u64(require_value("--materialization-search-ms"),
+                                               "materialization-search-ms");
+            if (ms == 0 || ms > 60'000) {
+                throw std::invalid_argument("--materialization-search-ms must be in [1, 60000]");
+            }
+            options.context_cache.materialization_search_budget_ns = ms * 1'000'000ULL;
         } else if (arg == "--max-long-anchors-per-continuation") {
             options.context_cache.max_long_anchors_per_continuation = static_cast<std::uint32_t>(
                 parse_nonnegative_int(require_value("--max-long-anchors-per-continuation"),

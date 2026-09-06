@@ -80,6 +80,8 @@ public:
         MaterializationDiagnostics diagnostics;
     };
 
+    void set_search_budget_ns(std::uint64_t budget_ns) noexcept { search_budget_cap_ns_ = budget_ns; }
+
     MaterializationPlanner() : target_ledger_(kTargetBudget + 17U) {
         queue_.reserve(kTargetBudget);
         pending_.reserve(kTargetBudget);
@@ -255,7 +257,7 @@ public:
 
         const Clock::time_point search_started = Clock::now();
         const std::uint64_t search_budget_ns =
-            std::min<std::uint64_t>(5'000'000ULL, incumbent.cost.total_ns / 20U);
+            std::min<std::uint64_t>(search_budget_cap_ns_, incumbent.cost.total_ns / 20U);
         const std::uint64_t guided_watchdog_ns = search_budget_ns;
         std::uint64_t maximum_step_ns          = 0;
         std::uint32_t optional_targets         = 0;
@@ -625,6 +627,8 @@ public:
 
 private:
     static constexpr std::uint32_t kTargetBudget           = 4096;
+    // Wall-clock cap per admission search; ContextCacheOptions::materialization_search_budget_ns.
+    std::uint64_t search_budget_cap_ns_                    = 5'000'000;
     static constexpr std::uint32_t kGuidedBeamWidth        = 16;
     static constexpr std::uint32_t kGuidedAssessmentBudget = 32;
 
