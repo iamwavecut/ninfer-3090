@@ -256,9 +256,16 @@ public:
         return published_stats_;
     }
 
+    // Three context-cache exhaustions in a row without a successful admission mean the retained
+    // checkpoints have wedged the pools: every retry of the session fails the same way. Reporting
+    // the Engine unavailable lets the healthcheck-driven restart clear the pools.
+    static constexpr std::uint32_t kStuckContextCacheExhaustions = 3;
+
     [[nodiscard]] bool is_available() const {
         std::lock_guard lock(queue_mutex_);
-        return !stopping_ && !failed_;
+        return !stopping_ && !failed_ &&
+               consecutive_context_cache_exhaustions_.load(std::memory_order_relaxed) <
+                   kStuckContextCacheExhaustions;
     }
 
     void reset_memory_peaks() noexcept {
@@ -1510,6 +1517,8 @@ private:
                         materializing_.reset();
                         if (!terminal.failure.empty()) {
                             ++cumulative_stats_.context_cache_exhausted_requests;
+                            consecutive_context_cache_exhaustions_.fetch_add(
+                                1, std::memory_order_relaxed);
                             complete_error(request, std::make_exception_ptr(RequestError(
                                                         RequestErrorKind::Overloaded,
                                                         "context cache exhausted: " +
@@ -1529,6 +1538,7 @@ private:
                     terminal.activation.reset();
                     const SequenceHandle sequence = activation.sequence();
                     resources_.adopt(*instance_.program, std::move(activation));
+                    consecutive_context_cache_exhaustions_.store(0, std::memory_order_relaxed);
                     request->sequence.emplace(sequence);
                     request->budget.emplace(std::move(control.budget));
                     request->lane.emplace(control.destination);
@@ -2057,6 +2067,7 @@ private:
     std::uint64_t next_publication_order_ = 1;
     std::array<std::shared_ptr<Request>, kMaximumConcurrency> slots_{};
     std::optional<MaterializingRequest> materializing_;
+    std::atomic<std::uint32_t> consecutive_context_cache_exhaustions_{0};
     Scheduling scheduler_;
     std::atomic<bool> admission_check_pending_{false};
     std::uint64_t worker_accounted_elapsed_ns_ = 0;
