@@ -120,7 +120,50 @@ SingleProjectionWeight single(std::span<const WeightInput> inputs) {
         // Keep that ABI detail out of the artifact's optional Use auxiliaries.
         if (divisor == 0) { divisor = 1.0F; }
     }
-    return {native_weight(view, divisor), policy, common_signs(inputs)};
+    SingleProjectionWeight result{native_weight(view, divisor), policy, common_signs(inputs)};
+    const Tensor& columns = inputs.front().input_columns;
+    for (const auto& input : inputs) {
+        require(input.input_columns.data == columns.data,
+                "fused projection rows must share one input gather");
+    }
+    if (columns.data != nullptr) {
+        require(columns.dtype == DType::I32 && columns.numel() == result.weight.k,
+                "an input gather must be INT32 [K]");
+        result.weight.input_columns = static_cast<const std::int32_t*>(columns.data);
+    }
+    return result;
+}
+
+bool gguf_parent(const WeightInput& input) {
+    return !input.weight.parts.empty() && input.weight.parts.front().parent != nullptr &&
+           is_gguf(input.weight.parts.front().parent->geometry.format);
+}
+
+// GGUF parts of a fused input projection, merged where consecutive logical inputs continue one
+// parent's rows into one output's rows.
+GgufProjectionWeights gguf_projection(std::span<const WeightInput> inputs,
+                                      std::span<const std::int32_t> outputs,
+                                      std::span<const std::int32_t> rows) {
+    GgufProjectionWeights result;
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        require(gguf_parent(inputs[i]), "input projection: GGUF parts cannot mix formats");
+        auto part = single(inputs.subspan(i, 1));
+        if (!result.parts.empty()) {
+            auto& last = result.parts.back();
+            const auto block = gguf_block_shape(last.weight.qtype);
+            const std::int64_t row_bytes = std::int64_t(last.weight.k / block.elements) * block.bytes;
+            const auto* end = static_cast<const std::byte*>(last.weight.qdata) + last.weight.n * row_bytes;
+            if (part.weight.qtype == last.weight.qtype && part.weight.qdata == end &&
+                outputs[i] == last.output && rows[i] == last.row + last.weight.n) {
+                last.weight.n += part.weight.n;
+                last.weight.shape[0] = last.weight.padded_shape[0] = last.weight.n;
+                continue;
+            }
+        }
+        result.parts.push_back({part.weight, outputs[i], rows[i]});
+    }
+    result.hadamard_signs = common_signs(inputs);
+    return result;
 }
 
 ProjectionWeights input_projection(std::span<const WeightInput, 4> inputs, bool attention) {
@@ -139,6 +182,19 @@ ProjectionWeights input_projection(std::span<const WeightInput, 4> inputs, bool 
                   : q == std::vector<std::uint64_t>{2048, 2048} && k == q &&
                         third == std::vector<std::uint64_t>{4096, 2048} && fourth == third;
     require(dense || moe, "input projection: unsupported logical projection geometry");
+    if (std::any_of(inputs.begin(), inputs.end(), gguf_parent)) {
+        require(dense, "input projection: GGUF parts need the dense geometry");
+        const auto q = static_cast<std::int32_t>(matrix(inputs[0])[0]);
+        const auto k = static_cast<std::int32_t>(matrix(inputs[1])[0]);
+        if (attention) {
+            const std::array<std::int32_t, 4> outputs{0, 2, 1, 3};
+            const std::array<std::int32_t, 4> rows{0, 0, 0, 0};
+            return gguf_projection(inputs, outputs, rows);
+        }
+        const std::array<std::int32_t, 4> outputs{0, 0, 0, 1};
+        const std::array<std::int32_t, 4> rows{0, q, q + k, 0};
+        return gguf_projection(inputs, outputs, rows);
+    }
     const auto joined = concatenate_rows(inputs);
     if (contiguous(joined)) {
         auto result       = single(inputs);
@@ -163,6 +219,8 @@ ProjectionWeights input_projection(std::span<const WeightInput, 4> inputs, bool 
 }
 
 } // namespace
+
+bool joins(std::span<const WeightInput> inputs) { return contiguous(concatenate_rows(inputs)); }
 
 SingleProjectionWeight prepare_linear_weight(const WeightInput& input) {
     return single({&input, 1});

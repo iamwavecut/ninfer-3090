@@ -84,4 +84,18 @@ void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, L
 void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, WorkspaceArena& ws,
                    cudaStream_t stream);
 
+/**
+ * Two-parent form: out[:,t] = silu(gate_weight * x[:,t]) * (up_weight * x[:,t]) for gate and up
+ * matrices of one shape [N,K] stored as separate parents. Registered for GGUF block matrices, whose
+ * two halves may use different block types; their products quantize the activation to q8_1 as
+ * llama.cpp does, whatever the policy. Size the workspace with
+ * linear_swiglu_pair_workspace_capacity_bytes().
+ */
+void linear_swiglu(const Tensor& x, const Weight& gate_weight, const Weight& up_weight, Tensor& out,
+                   LinearPolicy policy, WorkspaceArena& ws, cudaStream_t stream);
+
+[[nodiscard]] std::size_t linear_swiglu_pair_workspace_capacity_bytes(
+    QType gate_qtype, QType up_qtype, std::int32_t rows, std::int32_t input_rows,
+    LinearPolicy policy, std::int32_t min_tokens, std::int32_t max_tokens);
+
 } // namespace ninfer::ops

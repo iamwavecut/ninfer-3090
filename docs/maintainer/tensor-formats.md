@@ -8,7 +8,7 @@ separately.
 
 ## 1. Registered formats
 
-NInfer has exactly nine persistent numeric tensor formats in four categories.
+NInfer has exactly twenty-four persistent numeric tensor formats in five categories.
 
 Direct scalar formats preserve one logical scalar word per tensor element:
 
@@ -39,6 +39,27 @@ The row-scaled floating-point weight format is:
 | Canonical name | Code | Scale granularity | Scale |
 |---|---|---|---|
 | `fp8_e4m3fn_row_bf16` | E4M3FN, 8 bits/weight | one multiplier per logical row | BF16 |
+
+GGUF block formats keep ggml's quantized blocks byte for byte, so a GGUF tensor imports without
+decoding or requantizing:
+
+| Canonical name | ggml type | Block values | Block bytes | Bits/weight |
+|---|---:|---:|---:|---:|
+| `gguf_q8_0` | 8 | 32 | 34 | 8.50 |
+| `gguf_q2_k` | 10 | 256 | 84 | 2.625 |
+| `gguf_q3_k` | 11 | 256 | 110 | 3.4375 |
+| `gguf_q4_k` | 12 | 256 | 144 | 4.50 |
+| `gguf_q5_k` | 13 | 256 | 176 | 5.50 |
+| `gguf_q6_k` | 14 | 256 | 210 | 6.5625 |
+| `gguf_iq2_xxs` | 16 | 256 | 66 | 2.0625 |
+| `gguf_iq2_xs` | 17 | 256 | 74 | 2.3125 |
+| `gguf_iq3_xxs` | 18 | 256 | 98 | 3.0625 |
+| `gguf_iq1_s` | 19 | 256 | 50 | 1.5625 |
+| `gguf_iq4_nl` | 20 | 32 | 18 | 4.50 |
+| `gguf_iq3_s` | 21 | 256 | 110 | 3.4375 |
+| `gguf_iq2_s` | 22 | 256 | 82 | 2.5625 |
+| `gguf_iq4_xs` | 23 | 256 | 136 | 4.25 |
+| `gguf_iq1_m` | 29 | 256 | 56 | 1.75 |
 
 Each name fixes a code and scale contract. The format registry is implemented in
 [`tools/artifact/formats.py`](../../tools/artifact/formats.py) and
@@ -301,6 +322,20 @@ The format does not define how a floating-point source is assigned a scale or ro
 A recipe either preserves already selected code and scale words exactly or names its
 conversion method. Activation quantization and activation scales are separate compute or runtime-state
 concerns and are not persistent fields of this format.
+
+### 3.5 GGUF block formats
+
+A `gguf_*` weight is a row-major `[N,K]` matrix whose rows are `K / block_values` consecutive
+ggml blocks of the named type, each block the byte image of the `block_*` struct of
+`ggml-common.h`. The represented value of every element is what `ggml-quants.c`'s
+`dequantize_row_*` for that type computes from the block: the per-block and per-sub-block scales,
+the grids of the i-quants (`iq2xxs_grid`, `iq3s_grid`, ...), their sign encodings and the
+`IQ1S_DELTA`/`IQ1M_DELTA` offsets are ggml's, unchanged. A row gather or a consecutive row slice
+copies whole rows; nothing in a block is renormalized.
+
+The format fixes the stored weight, not the arithmetic of a product. NInfer's products quantize the
+activation to ggml's `q8_1` numbers (one binary16 scale and one sum per 32 values) as llama.cpp
+does, and accumulate in FP32 (see `src/ops/linear/gguf/`).
 
 ## 4. Grouped signed-integer tensor model
 

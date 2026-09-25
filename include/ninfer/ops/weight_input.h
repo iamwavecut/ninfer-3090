@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <variant>
+#include <vector>
 
 namespace ninfer::ops {
 
@@ -19,6 +20,9 @@ struct WeightInput {
     // hadamard_transform(input, signs) instead of the input. Empty for an ordinary matrix. No Op
     // reads it; the caller rotates the activation (see the model's execution layer).
     Tensor hadamard_signs{};
+    // INT32 [K] input gather of a GGUF matrix stored over permuted input columns (see
+    // Weight::input_columns). Empty for every other matrix.
+    Tensor input_columns{};
 };
 
 struct SingleProjectionWeight {
@@ -35,7 +39,27 @@ struct PairedProjectionWeights {
     Tensor hadamard_signs{};
 };
 
-using ProjectionWeights = std::variant<SingleProjectionWeight, PairedProjectionWeights>;
+// A fused input projection over GGUF matrices, whose logical parts may sit in different parents
+// of different block types. Each part is rows of one parent landing at `row` of output `output`:
+// for a GDN projection 0 = q/k/v and 1 = z; for an attention projection 0 = query, 1 = gate,
+// 2 = key and 3 = value.
+struct GgufProjectionPart {
+    Weight weight;
+    std::int32_t output = 0;
+    std::int32_t row    = 0;
+};
+
+struct GgufProjectionWeights {
+    std::vector<GgufProjectionPart> parts;
+    LinearPolicy policy = LinearPolicy::A16Only;
+    Tensor hadamard_signs{};
+};
+
+using ProjectionWeights =
+    std::variant<SingleProjectionWeight, PairedProjectionWeights, GgufProjectionWeights>;
+
+// Whether the rows of `inputs`, in order, are one contiguous region of one parent.
+[[nodiscard]] bool joins(std::span<const WeightInput> inputs);
 
 // Prepare the existing native forms; no device allocation, upload, execution or graph rewrite.
 // Runtime shape/phase choices and scratch remain with the actual calling Op.

@@ -18,12 +18,28 @@ constexpr std::array kFormats = {
     std::pair{QType::T2_G128_FP16, std::string_view{"t2_g128_fp16"}},
     std::pair{QType::NVFP4, std::string_view{"nvfp4"}},
     std::pair{QType::FP8_E4M3FN_ROW_BF16, std::string_view{"fp8_e4m3fn_row_bf16"}},
+    std::pair{QType::GGUF_Q8_0, std::string_view{"gguf_q8_0"}},
+    std::pair{QType::GGUF_Q2_K, std::string_view{"gguf_q2_k"}},
+    std::pair{QType::GGUF_Q3_K, std::string_view{"gguf_q3_k"}},
+    std::pair{QType::GGUF_Q4_K, std::string_view{"gguf_q4_k"}},
+    std::pair{QType::GGUF_Q5_K, std::string_view{"gguf_q5_k"}},
+    std::pair{QType::GGUF_Q6_K, std::string_view{"gguf_q6_k"}},
+    std::pair{QType::GGUF_IQ2_XXS, std::string_view{"gguf_iq2_xxs"}},
+    std::pair{QType::GGUF_IQ2_XS, std::string_view{"gguf_iq2_xs"}},
+    std::pair{QType::GGUF_IQ2_S, std::string_view{"gguf_iq2_s"}},
+    std::pair{QType::GGUF_IQ3_XXS, std::string_view{"gguf_iq3_xxs"}},
+    std::pair{QType::GGUF_IQ3_S, std::string_view{"gguf_iq3_s"}},
+    std::pair{QType::GGUF_IQ1_S, std::string_view{"gguf_iq1_s"}},
+    std::pair{QType::GGUF_IQ1_M, std::string_view{"gguf_iq1_m"}},
+    std::pair{QType::GGUF_IQ4_NL, std::string_view{"gguf_iq4_nl"}},
+    std::pair{QType::GGUF_IQ4_XS, std::string_view{"gguf_iq4_xs"}},
 };
 constexpr std::array kLayouts = {
     std::pair{QuantLayout::Contiguous, std::string_view{"contiguous_le_v1"}},
     std::pair{QuantLayout::RowSplit, std::string_view{"row_split_k128_v1"}},
     std::pair{QuantLayout::RowScale, std::string_view{"row_scale_v1"}},
     std::pair{QuantLayout::BlockScaleK16M128x4, std::string_view{"block_scale_k16_m128x4_v1"}},
+    std::pair{QuantLayout::GgufBlocks, std::string_view{"gguf_blocks_v1"}},
 };
 
 // Layouts a device may hold but an artifact may never declare. They are produced by a load-time

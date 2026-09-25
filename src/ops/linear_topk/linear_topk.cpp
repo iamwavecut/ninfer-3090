@@ -2,6 +2,7 @@
 #include "ninfer/ops/linear_topk.h"
 
 #include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/gguf/gguf_linear.h"
 #include "ops/linear_topk/linear_topk_launch.h"
 #include "ops/linear_topk/linear_topk_workspace.h"
 
@@ -19,6 +20,7 @@ enum class HeadProfile : std::uint8_t {
     Fp8Full,
     Q4Optimized,
     T2,
+    Gguf,
 };
 
 bool aligned_to(const void* pointer, std::uintptr_t alignment) {
@@ -53,6 +55,10 @@ HeadProfile resolve_profile(QType qtype, std::int32_t head_rows, std::int32_t in
                                          head_rows == detail::kLinearTopKOptimizedRows)) {
         return HeadProfile::T2;
     }
+    if (is_gguf(qtype) && (head_rows == detail::kLinearTopKFullRows ||
+                           head_rows == detail::kLinearTopKOptimizedRows)) {
+        return HeadProfile::Gguf;
+    }
     throw std::invalid_argument("linear_topk: unsupported head profile");
 }
 
@@ -63,8 +69,11 @@ struct Plan {
 };
 
 Plan plan_for(HeadProfile profile, int columns) {
-    // T2 materializes BF16 logits per chunk and the producer reduces them in grouped K-split.
-    if (profile == HeadProfile::T2) { return {detail::kLinearTopKGroupedRows, 0}; }
+    // T2 and GGUF materialize BF16 logits per chunk and the producer reduces them in grouped
+    // K-split.
+    if (profile == HeadProfile::T2 || profile == HeadProfile::Gguf) {
+        return {detail::kLinearTopKGroupedRows, 0};
+    }
     if (profile == HeadProfile::Q4Optimized) {
         if (columns <= 16) return {16, 0};
         if (columns <= 32) return {64, 32};
@@ -151,12 +160,16 @@ void require_t2(const Weight& head, std::int32_t rows) {
 void require_no_weight_overlap(const Weight& head, const Tensor& hidden,
                                const Tensor& candidate_ids, const Tensor& candidate_scores,
                                const Tensor* id_map, const detail::LinearTopKWorkspace& scratch) {
+    const auto block = gguf_block_shape(head.qtype);
     const std::size_t code_bytes =
-        head.qtype == QType::Q4_G64_FP16    ? static_cast<std::size_t>(head.n) * head.k / 2
+        is_gguf(head.qtype)
+            ? static_cast<std::size_t>(head.n) * (head.k / block.elements) * block.bytes
+        : head.qtype == QType::Q4_G64_FP16  ? static_cast<std::size_t>(head.n) * head.k / 2
         : head.qtype == QType::T2_G128_FP16 ? static_cast<std::size_t>(head.n) * head.k / 4
                                             : static_cast<std::size_t>(head.n) * head.k;
     const std::size_t scale_bytes =
-        head.qtype == QType::Q8_G32_FP16
+        is_gguf(head.qtype) ? 0
+        : head.qtype == QType::Q8_G32_FP16
             ? static_cast<std::size_t>(head.n) * (head.k / 32) * sizeof(std::uint16_t)
         : head.qtype == QType::Q4_G64_FP16
             ? static_cast<std::size_t>(head.n) * (head.k / 64) * sizeof(std::uint16_t)
@@ -205,8 +218,9 @@ Tensor column_slice(const Tensor& tensor, int first, int columns) {
 void execute(const Tensor& hidden, const Weight& head, const Tensor* id_map, Tensor& ids,
              Tensor& scores, WorkspaceArena& workspace, cudaStream_t stream) {
     const auto profile      = resolve_profile(head.qtype, head.n, head.k);
-    const int chunk_columns = profile == HeadProfile::T2 ? detail::kLinearTopKT2ChunkColumns
-                                                         : detail::kLinearTopKMaxChunkColumns;
+    const bool materialized = profile == HeadProfile::T2 || profile == HeadProfile::Gguf;
+    const int chunk_columns = materialized ? detail::kLinearTopKT2ChunkColumns
+                                           : detail::kLinearTopKMaxChunkColumns;
     for (int first = 0; first < hidden.ne[1];) {
         const int columns = std::min(chunk_columns, hidden.ne[1] - first);
         auto x            = column_slice(hidden, first, columns);
@@ -215,9 +229,7 @@ void execute(const Tensor& hidden, const Weight& head, const Tensor* id_map, Ten
         const auto plan   = plan_for(profile, columns);
         auto scope        = workspace.scope();
         Tensor logits;
-        if (profile == HeadProfile::T2) {
-            logits = workspace.alloc(DType::BF16, {head.n, columns}, 256);
-        }
+        if (materialized) { logits = workspace.alloc(DType::BF16, {head.n, columns}, 256); }
         const auto scratch = detail::allocate_linear_topk_workspace(
             workspace, head.n, columns, plan.rows, plan.tile, plan.block_k);
         require_scratch_nonoverlap(hidden, ids, scores, id_map, scratch);
@@ -232,6 +244,15 @@ void execute(const Tensor& hidden, const Weight& head, const Tensor* id_map, Ten
             detail::linear_topk_t2_launch(
                 x, head, id_map != nullptr ? head.n : detail::kLinearTopKFullValidRows, id_map,
                 logits, scratch, stream);
+        else if (profile == HeadProfile::Gguf) {
+            {
+                auto call = workspace.scope();
+                detail::gguf_linear(x, head, logits, workspace, stream);
+            }
+            detail::linear_topk_logits_launch(
+                logits, id_map != nullptr ? head.n : detail::kLinearTopKFullValidRows, id_map,
+                scratch, stream);
+        }
         else
             detail::linear_topk_q4_launch(x, head, *id_map, scratch, stream);
         detail::linear_topk_merge_launch(scratch, out_ids, out_scores, stream);
@@ -247,7 +268,7 @@ std::size_t linear_topk_workspace_capacity_bytes(QType qtype, std::int32_t head_
     if (min_columns < 1 || max_columns < min_columns)
         throw std::invalid_argument("linear_topk workspace: invalid column interval");
     WorkspaceLayoutBuilder layout;
-    if (profile == HeadProfile::T2) {
+    if (profile == HeadProfile::T2 || profile == HeadProfile::Gguf) {
         // Chunks are at most kLinearTopKT2ChunkColumns wide and every allocation grows with the
         // column count, so the widest reachable chunk is the peak.
         const int columns = std::min(detail::kLinearTopKT2ChunkColumns, max_columns);
@@ -256,6 +277,11 @@ std::size_t linear_topk_workspace_capacity_bytes(QType qtype, std::int32_t head_
         (void)layout.alloc(DType::BF16, {head_rows, columns}, 256);
         (void)detail::allocate_linear_topk_workspace(layout, head_rows, columns, plan.rows,
                                                      plan.tile, plan.block_k);
+        if (profile == HeadProfile::Gguf) {
+            const detail::GgufShape shape{qtype, head_rows, input_rows};
+            (void)layout.alloc_bytes(detail::gguf_project_workspace_bytes(
+                {&shape, 1}, std::min(min_columns, columns), columns));
+        }
         return layout.peak_bytes();
     }
     for (int columns = 1; columns <= detail::kLinearTopKMaxChunkColumns; ++columns) {
@@ -293,6 +319,8 @@ void linear_topk(const Tensor& hidden, const Weight& head, std::int32_t valid_ro
         require_q8(head);
     } else if (profile == HeadProfile::T2) {
         require_t2(head, detail::kLinearTopKFullRows);
+    } else if (profile == HeadProfile::Gguf) {
+        detail::require_gguf(head, "linear_topk GGUF full head");
     } else {
         (void)detail::validate_fp8_weight(head, "linear_topk FP8 full head");
     }
@@ -309,6 +337,8 @@ void linear_topk(const Tensor& hidden, const Weight& head, const Tensor& row_to_
         require_q4(head);
     } else if (profile == HeadProfile::T2) {
         require_t2(head, detail::kLinearTopKOptimizedRows);
+    } else if (profile == HeadProfile::Gguf && head.n == detail::kLinearTopKOptimizedRows) {
+        detail::require_gguf(head, "linear_topk GGUF proposal head");
     } else {
         throw std::invalid_argument("linear_topk: invalid optimized-head profile");
     }

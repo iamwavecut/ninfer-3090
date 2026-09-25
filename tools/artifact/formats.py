@@ -43,7 +43,23 @@ class Fp8RowFormat:
     name: str
 
 
-NumericFormat: TypeAlias = DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat
+@dataclass(frozen=True, slots=True)
+class GgufFormat:
+    """One ggml block type, stored as the exporter wrote its blocks: whole blocks per row.
+
+    `ggml_type` is the block type's id in the GGUF tensor directory. A row of K elements is
+    K / block_elements consecutive blocks of block_bytes each, so a row subset is a byte copy.
+    """
+
+    name: str
+    ggml_type: int
+    block_elements: int
+    block_bytes: int
+
+
+NumericFormat: TypeAlias = (
+    DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat | GgufFormat
+)
 
 
 BF16 = DirectFormat("bf16", 2)
@@ -60,6 +76,23 @@ T2_G128_FP16 = QuantFormat("t2_g128_fp16", 2, 128, -1, 1)
 NVFP4 = Nvfp4Format("nvfp4", 16)
 FP8_E4M3FN_ROW_BF16 = Fp8RowFormat("fp8_e4m3fn_row_bf16")
 
+# ggml block types (ggml-common.h), kept byte for byte.
+GGUF_Q2_K = GgufFormat("gguf_q2_k", 10, 256, 84)
+GGUF_Q3_K = GgufFormat("gguf_q3_k", 11, 256, 110)
+GGUF_Q4_K = GgufFormat("gguf_q4_k", 12, 256, 144)
+GGUF_Q5_K = GgufFormat("gguf_q5_k", 13, 256, 176)
+GGUF_Q6_K = GgufFormat("gguf_q6_k", 14, 256, 210)
+GGUF_IQ2_XXS = GgufFormat("gguf_iq2_xxs", 16, 256, 66)
+GGUF_IQ2_XS = GgufFormat("gguf_iq2_xs", 17, 256, 74)
+GGUF_IQ3_XXS = GgufFormat("gguf_iq3_xxs", 18, 256, 98)
+GGUF_IQ1_S = GgufFormat("gguf_iq1_s", 19, 256, 50)
+GGUF_IQ4_NL = GgufFormat("gguf_iq4_nl", 20, 32, 18)
+GGUF_IQ3_S = GgufFormat("gguf_iq3_s", 21, 256, 110)
+GGUF_IQ2_S = GgufFormat("gguf_iq2_s", 22, 256, 82)
+GGUF_IQ4_XS = GgufFormat("gguf_iq4_xs", 23, 256, 136)
+GGUF_IQ1_M = GgufFormat("gguf_iq1_m", 29, 256, 56)
+GGUF_Q8_0 = GgufFormat("gguf_q8_0", 8, 32, 34)
+
 
 DIRECT_FORMATS = MappingProxyType({item.name: item for item in (BF16, FP32, INT32)})
 QUANT_FORMATS = MappingProxyType(
@@ -70,8 +103,39 @@ QUANT_FORMATS = MappingProxyType(
 )
 NVFP4_FORMATS = MappingProxyType({NVFP4.name: NVFP4})
 FP8_ROW_FORMATS = MappingProxyType({FP8_E4M3FN_ROW_BF16.name: FP8_E4M3FN_ROW_BF16})
+GGUF_FORMATS = MappingProxyType(
+    {
+        item.name: item
+        for item in (
+            GGUF_Q2_K,
+            GGUF_Q3_K,
+            GGUF_Q4_K,
+            GGUF_Q5_K,
+            GGUF_Q6_K,
+            GGUF_IQ2_XXS,
+            GGUF_IQ2_XS,
+            GGUF_IQ3_XXS,
+            GGUF_IQ1_S,
+            GGUF_IQ4_NL,
+            GGUF_IQ3_S,
+            GGUF_IQ2_S,
+            GGUF_IQ4_XS,
+            GGUF_IQ1_M,
+            GGUF_Q8_0,
+        )
+    }
+)
+GGUF_FORMATS_BY_TYPE = MappingProxyType(
+    {item.ggml_type: item for item in GGUF_FORMATS.values()}
+)
 NUMERIC_FORMATS = MappingProxyType(
-    {**DIRECT_FORMATS, **QUANT_FORMATS, **NVFP4_FORMATS, **FP8_ROW_FORMATS}
+    {
+        **DIRECT_FORMATS,
+        **QUANT_FORMATS,
+        **NVFP4_FORMATS,
+        **FP8_ROW_FORMATS,
+        **GGUF_FORMATS,
+    }
 )
 
 
@@ -157,11 +221,14 @@ __all__ = [
     "QUANT_FORMATS",
     "NVFP4_FORMATS",
     "FP8_ROW_FORMATS",
+    "GGUF_FORMATS",
+    "GGUF_FORMATS_BY_TYPE",
     "NUMERIC_FORMATS",
     "DirectFormat",
     "QuantFormat",
     "Nvfp4Format",
     "Fp8RowFormat",
+    "GgufFormat",
     "NumericFormat",
     "get_format",
     "decode_e2m1_word",

@@ -19,7 +19,55 @@ enum class QType : std::uint16_t {
     // Ternary codes {-1, 0, +1} as two-bit two's complement (0b10 unused), four per byte in
     // column order, one binary16 multiplier per 128 columns. Row-split only.
     T2_G128_FP16 = 9,
+    // ggml block types kept as a GGUF stored them (GgufBlocks layout only): each row is its K /
+    // block_elements blocks, byte for byte. Their products quantize the activation to ggml's q8_1.
+    GGUF_Q8_0    = 10,
+    GGUF_Q2_K    = 11,
+    GGUF_Q3_K    = 12,
+    GGUF_Q4_K    = 13,
+    GGUF_Q5_K    = 14,
+    GGUF_Q6_K    = 15,
+    GGUF_IQ2_XXS = 16,
+    GGUF_IQ2_XS  = 17,
+    GGUF_IQ2_S   = 18,
+    GGUF_IQ3_XXS = 19,
+    GGUF_IQ3_S   = 20,
+    GGUF_IQ1_S   = 21,
+    GGUF_IQ1_M   = 22,
+    GGUF_IQ4_NL  = 23,
+    GGUF_IQ4_XS  = 24,
 };
+
+[[nodiscard]] constexpr bool is_gguf(QType format) {
+    return format >= QType::GGUF_Q8_0 && format <= QType::GGUF_IQ4_XS;
+}
+
+struct GgufBlockShape {
+    int elements = 0;
+    int bytes    = 0;
+};
+
+// ggml-common.h's block sizes; {0, 0} for every non-GGUF format.
+[[nodiscard]] constexpr GgufBlockShape gguf_block_shape(QType format) {
+    switch (format) {
+    case QType::GGUF_Q8_0: return {32, 34};
+    case QType::GGUF_Q2_K: return {256, 84};
+    case QType::GGUF_Q3_K: return {256, 110};
+    case QType::GGUF_Q4_K: return {256, 144};
+    case QType::GGUF_Q5_K: return {256, 176};
+    case QType::GGUF_Q6_K: return {256, 210};
+    case QType::GGUF_IQ2_XXS: return {256, 66};
+    case QType::GGUF_IQ2_XS: return {256, 74};
+    case QType::GGUF_IQ2_S: return {256, 82};
+    case QType::GGUF_IQ3_XXS: return {256, 98};
+    case QType::GGUF_IQ3_S: return {256, 110};
+    case QType::GGUF_IQ1_S: return {256, 50};
+    case QType::GGUF_IQ1_M: return {256, 56};
+    case QType::GGUF_IQ4_NL: return {32, 18};
+    case QType::GGUF_IQ4_XS: return {256, 136};
+    default: return {};
+    }
+}
 
 enum class QuantLayout : std::uint16_t {
     RowSplit            = 0,
@@ -31,6 +79,8 @@ enum class QuantLayout : std::uint16_t {
     // tile reads whole cache lines instead of one 32-byte record per row per group. Device-only --
     // it is produced by a load-time permute, never stored in a `.ninfer`.
     RowSplitPanel = 4,
+    // Rows of whole ggml blocks, as a GGUF stores them.
+    GgufBlocks = 5,
 };
 
 // Rows per stored panel. Four 32-byte records is exactly one 128-byte line, which is all the
@@ -79,6 +129,10 @@ struct Weight {
     // other row is silently wrong by a scale factor.
     const void* weight_divisors      = nullptr;
     std::int32_t weight_divisor_rows = 0;
+
+    // INT32 [K] input gather of a GGUF matrix whose stored columns are a permutation of its
+    // input's: column c multiplies input element input_columns[c]. Null for every other matrix.
+    const std::int32_t* input_columns = nullptr;
 };
 
 } // namespace ninfer

@@ -58,22 +58,33 @@ __global__ __launch_bounds__(kThreads) void t2_logits_topk_kernel(
 
 } // namespace
 
-void linear_topk_t2_launch(const Tensor& hidden, const Weight& head, std::int32_t valid_rows,
-                           const Tensor* row_to_global_ids, Tensor& logits,
-                           const LinearTopKWorkspace& workspace, cudaStream_t stream) {
-    const std::int32_t columns = hidden.ne[1];
+void linear_topk_logits_launch(const Tensor& logits, std::int32_t valid_rows,
+                               const Tensor* row_to_global_ids,
+                               const LinearTopKWorkspace& workspace, cudaStream_t stream) {
+    const std::int32_t columns = logits.ne[1];
     if (columns <= 0 || columns > kColumns ||
         workspace.rows_per_producer != kLinearTopKGroupedRows || workspace.tile_columns != 0 ||
-        logits.dtype != DType::BF16 || logits.ne[0] != head.n || logits.ne[1] != columns) {
-        throw std::invalid_argument("linear_topk: invalid T2 head launch");
+        logits.dtype != DType::BF16) {
+        throw std::invalid_argument("linear_topk: invalid materialized-logits launch");
     }
-    ops::linear(hidden, head, logits, stream);
     t2_logits_topk_kernel<<<workspace.producer_groups, kThreads, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(logits.data), head.n, valid_rows, columns,
+        static_cast<const __nv_bfloat16*>(logits.data), logits.ne[0], valid_rows, columns,
         static_cast<std::uint64_t*>(workspace.partial_keys.data), workspace.producer_groups,
         row_to_global_ids != nullptr ? static_cast<const std::int32_t*>(row_to_global_ids->data)
                                      : nullptr);
     CUDA_CHECK(cudaGetLastError());
+}
+
+void linear_topk_t2_launch(const Tensor& hidden, const Weight& head, std::int32_t valid_rows,
+                           const Tensor* row_to_global_ids, Tensor& logits,
+                           const LinearTopKWorkspace& workspace, cudaStream_t stream) {
+    const std::int32_t columns = hidden.ne[1];
+    if (columns <= 0 || columns > kColumns || logits.dtype != DType::BF16 ||
+        logits.ne[0] != head.n || logits.ne[1] != columns) {
+        throw std::invalid_argument("linear_topk: invalid T2 head launch");
+    }
+    ops::linear(hidden, head, logits, stream);
+    linear_topk_logits_launch(logits, valid_rows, row_to_global_ids, workspace, stream);
 }
 
 } // namespace ninfer::ops::detail

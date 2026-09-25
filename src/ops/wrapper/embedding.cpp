@@ -2,6 +2,7 @@
 #include "ninfer/ops/embedding.h"
 
 #include "ops/common/math.h"
+#include "ops/linear/gguf/gguf_linear.h"
 #include "ops/linear/fp8/fp8_format.h"
 #include "ops/launcher/embed_gather.h" // detail::embed_gather_*_launch
 #include "core/weight_view.h"
@@ -239,6 +240,12 @@ void embedding(const Tensor& ids, const Weight& table, Tensor& out, cudaStream_t
     require_ids_shape(ids);
     require_out_shape(ids, out);
 
+    if (is_gguf(table.qtype)) {
+        if (is_empty_T(ids, out)) { return; }
+        require_non_empty_tensors(ids, out);
+        detail::gguf_embedding(table, ids, out, stream);
+        return;
+    }
     switch (table.qtype) {
     case QType::BF16: {
         require_dense_metadata(table, out);

@@ -15,8 +15,10 @@ from typing import Sequence
 
 
 from .formats import (
+    GGUF_FORMATS,
     DirectFormat,
     Fp8RowFormat,
+    GgufFormat,
     Nvfp4Format,
     NumericFormat,
     QuantFormat,
@@ -69,6 +71,15 @@ class BlockScaleGeometry:
 
 
 @dataclass(frozen=True, slots=True)
+class GgufBlocksGeometry:
+    n: int
+    k: int
+    blocks_per_row: int
+    row_bytes: int
+    payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class RowScaleGeometry:
     n: int
     k: int
@@ -94,6 +105,7 @@ ROW_SCALE_V1 = Layout(
     256,
     frozenset(("fp8_e4m3fn_row_bf16",)),
 )
+GGUF_BLOCKS_V1 = Layout("gguf_blocks_v1", 256, frozenset(GGUF_FORMATS))
 
 LAYOUTS = MappingProxyType(
     {
@@ -103,6 +115,7 @@ LAYOUTS = MappingProxyType(
             ROW_SPLIT_K128_V1,
             BLOCK_SCALE_K16_M128X4_V1,
             ROW_SCALE_V1,
+            GGUF_BLOCKS_V1,
         )
     }
 )
@@ -260,6 +273,28 @@ def row_scale_geometry(
     )
 
 
+def gguf_blocks_geometry(
+    format: str | GgufFormat, shape: Sequence[int]
+) -> GgufBlocksGeometry:
+    spec = _format(format)
+    if not isinstance(spec, GgufFormat):
+        raise ValueError("gguf_blocks_v1 requires a ggml block format")
+    n, k = _shape(shape, rank=2)
+    if k % spec.block_elements:
+        raise ValueError(
+            f"gguf_blocks_v1 requires K divisible by {spec.block_elements}, got {k}"
+        )
+    blocks_per_row = k // spec.block_elements
+    row_bytes = blocks_per_row * spec.block_bytes
+    return GgufBlocksGeometry(
+        n=n,
+        k=k,
+        blocks_per_row=blocks_per_row,
+        row_bytes=row_bytes,
+        payload_bytes=n * row_bytes,
+    )
+
+
 def encoded_size(
     layout: str | Layout,
     format: str | NumericFormat,
@@ -295,4 +330,8 @@ def encoded_size(
         if not isinstance(numeric_spec, Fp8RowFormat):
             raise ValueError("row_scale_v1 requires a row-scaled FP8 format")
         return row_scale_geometry(numeric_spec, shape).payload_bytes
+    if layout_spec is GGUF_BLOCKS_V1:
+        if not isinstance(numeric_spec, GgufFormat):
+            raise ValueError("gguf_blocks_v1 requires a ggml block format")
+        return gguf_blocks_geometry(numeric_spec, shape).payload_bytes
     raise ValueError(f"unsupported tensor layout: {layout_spec.name!r}")

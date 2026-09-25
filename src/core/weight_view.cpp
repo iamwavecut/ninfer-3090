@@ -131,6 +131,15 @@ WeightGeometry weight_geometry(QType format, QuantLayout layout,
         out.high_offset         = aligned(out.code_bytes, 256);
         out.high_bytes          = mul(n, out.high_bytes_per_row);
         out.scale_offset        = add(out.high_offset, aligned(out.high_bytes, 256));
+    } else if (layout == QuantLayout::GgufBlocks) {
+        const auto block = gguf_block_shape(format);
+        if (!is_gguf(format) || k % std::uint64_t(block.elements)) {
+            throw std::invalid_argument("GgufBlocks requires a ggml block format over whole blocks");
+        }
+        out.group_size         = block.elements;
+        out.code_bytes_per_row = mul(k / block.elements, block.bytes);
+        out.code_bytes         = mul(n, out.code_bytes_per_row);
+        out.scale_offset       = out.code_bytes;
     } else if (layout == QuantLayout::RowScale) {
         if (format != QType::FP8_E4M3FN_ROW_BF16) {
             throw std::invalid_argument("RowScale requires row-scaled FP8");

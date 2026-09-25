@@ -3,6 +3,7 @@
 
 #include "ops/linear/bf16/bf16_dispatch.h"
 #include "ops/linear/fp8/fp8_dispatch.h"
+#include "ops/linear/gguf/gguf_linear.h"
 #include "ops/linear/nvfp4/nvfp4_dispatch.h"
 #include "ops/linear/q4/q4_dispatch.h"
 #include "ops/linear/q5/q5_dispatch.h"
@@ -76,6 +77,13 @@ void validate_linear_semantics(const Tensor& x, const Weight& w, const Tensor& o
 
 void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
                      WorkspaceArena* workspace, cudaStream_t stream) {
+    if (is_gguf(w.qtype)) {
+        if (workspace == nullptr) {
+            throw std::invalid_argument("linear: a GGUF weight needs the workspace overload");
+        }
+        detail::gguf_linear(x, w, out, *workspace, stream);
+        return;
+    }
     switch (w.qtype) {
     case QType::Q4_G64_FP16:
         detail::q4_dispatch(x, w, out, policy, stream);
@@ -108,6 +116,7 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
         return;
     case QType::FP32:
     case QType::INT32:
+    default:
         break;
     }
     throw std::invalid_argument("linear: unsupported weight qtype");
@@ -123,6 +132,10 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
         throw std::invalid_argument("linear workspace: invalid token interval");
     }
 
+    if (is_gguf(qtype)) {
+        const detail::GgufShape shape{qtype, output_rows, input_rows};
+        return detail::gguf_project_workspace_bytes({&shape, 1}, min_tokens, max_tokens);
+    }
     switch (qtype) {
     case QType::Q4_G64_FP16:
         (void)detail::select_q4_launch(output_rows, input_rows, min_tokens, policy);
@@ -156,6 +169,7 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
                                                            min_tokens, max_tokens);
     case QType::FP32:
     case QType::INT32:
+    default:
         break;
     }
     throw std::invalid_argument("linear workspace: unsupported weight qtype");

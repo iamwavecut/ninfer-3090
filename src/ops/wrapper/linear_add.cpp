@@ -7,6 +7,7 @@
 #include "ops/linear_add/bf16/bf16_linear_add_plan.h"
 #include "ops/linear/fp8/fp8_config.h"
 #include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/gguf/gguf_linear.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_format.h"
 #include "ops/linear/t2/t2_a8.h"
@@ -110,6 +111,10 @@ std::size_t linear_add_workspace_capacity_bytes(QType qtype, std::int32_t output
     if (min_tokens <= 0 || max_tokens < min_tokens) {
         throw std::invalid_argument("linear_add workspace: invalid token interval");
     }
+    if (is_gguf(qtype)) {
+        const detail::GgufShape shape{qtype, output_rows, input_rows};
+        return detail::gguf_project_workspace_bytes({&shape, 1}, min_tokens, max_tokens);
+    }
     if (qtype == QType::T2_G128_FP16) {
         (void)linear_workspace_capacity_bytes(qtype, output_rows, input_rows, LinearPolicy::A16Only,
                                               min_tokens, max_tokens);
@@ -194,6 +199,11 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
     require_tensor(residual_out, DType::BF16, w.n, t, "residual_out");
     if (overlaps(x, residual_out)) {
         throw std::invalid_argument("linear_add: x and residual_out must not overlap");
+    }
+
+    if (is_gguf(w.qtype)) {
+        detail::gguf_linear_add(x, w, residual_out, ws, stream);
+        return;
     }
 
     if (w.qtype == QType::T2_G128_FP16) {

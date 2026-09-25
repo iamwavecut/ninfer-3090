@@ -15,10 +15,11 @@ The storage registry contains exactly these identities:
 | `row_split_k128_v1` | tensor layout | `q4_g64_fp16`, `q5_g64_fp16`, `q6_g64_fp16`, `q8_g32_fp16`, `t2_g128_fp16` | rank 2 `[N,K]` | 256 bytes |
 | `block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 2 `[N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `row_scale_v1` | tensor layout | `fp8_e4m3fn_row_bf16` | rank 2 `[N,K]` | 256 bytes |
+| `gguf_blocks_v1` | tensor layout | the fifteen `gguf_*` formats | rank 2 `[N,K]`, `K % block_values == 0` | 256 bytes |
 | `raw_bytes_v1` | resource encoding | not applicable | nonempty byte string | 1 byte |
 
 These format/layout pairs define the current codec support. Native consumer requirements are
-covered separately in Section 8.
+covered separately in Section 9.
 
 Object alignment applies to the object's payload-relative `offset` in the `.ninfer` JSON. Internal
 plane offsets and padding belong to the selected layout. Inter-object padding belongs to the
@@ -336,7 +337,22 @@ encoded by concatenating the selected code rows, recomputing the scale-plane ali
 row count, and appending the selected scale words in the same row order. It does not decode or
 requantize either plane.
 
-## 6. `raw_bytes_v1`
+## 6. `gguf_blocks_v1`
+
+The payload is the matrix's rows in order, each row its `K / block_values` blocks in order, every
+block the bytes a GGUF file stores for it:
+
+```text
+row_bytes     = (K / block_values) * block_bytes
+payload_bytes = N * row_bytes
+```
+
+There is no padding, plane split or reordering, so a row, a consecutive slice or a row gather is a
+copy of whole `row_bytes` spans, and an imported tensor's payload equals the GGUF tensor data
+(after any row permutation the recipe records, such as llama.cpp's tiled GDN value heads).
+Blocks carry their own scales; the layout adds none.
+
+## 7. `raw_bytes_v1`
 
 `raw_bytes_v1` is a resource encoding, not a tensor layout. Its enclosing object payload is
 the resource byte string itself:
@@ -351,7 +367,7 @@ trailing padding. The resource object's JSON `bytes` is its exact nonzero length
 returns the complete span unchanged. A model contract assigns a resource name and interprets those
 bytes; the common encoding does not infer that meaning from the name.
 
-## 7. Decode boundary
+## 8. Decode boundary
 
 Layout decoding yields only persistent logical words:
 
@@ -362,13 +378,14 @@ Layout decoding yields only persistent logical words:
   FP32 weight divisor of each stacked source matrix;
 - `row_scale_v1` yields the natural row-major E4M3FN code words and one BF16 multiplier per logical
   row;
+- `gguf_blocks_v1` yields the ggml blocks of each row, unchanged;
 - `raw_bytes_v1` yields the enclosing resource bytes.
 
 Dequantized values follow the reconstruction rule in `tensor-formats.md`. This document does
 not select a quantization encoder, output dtype, accumulation dtype, kernel, runtime device layout,
 or model consumer.
 
-## 8. Logical views and native operands
+## 9. Logical views and native operands
 
 Bindings address C-order logical element ranges of a parent object. The parent retains its full
 geometry and backing allocation, so a view can locate code and scale planes using the original

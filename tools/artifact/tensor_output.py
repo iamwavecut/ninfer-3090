@@ -15,12 +15,14 @@ from .codecs.row_split import encode_row_split, split_row_planes
 from .formats import (
     DirectFormat,
     Fp8RowFormat,
+    GgufFormat,
     Nvfp4Format,
     QuantFormat,
     get_format,
 )
 from .layouts import (
     block_scale_geometry,
+    gguf_blocks_geometry,
     row_scale_geometry,
     row_split_geometry,
 )
@@ -105,6 +107,16 @@ class TensorOutput:
             self.write_bytes(
                 g.scale_plane_offset + row_begin * 2, block[local.scale_plane_offset :]
             )
+        elif isinstance(self.format, GgufFormat):
+            # The rows are the exporter's own block bytes; nothing is decoded or re-encoded.
+            g = gguf_blocks_geometry(self.format, obj.shape)
+            block = codes.contiguous()
+            if block.dtype != torch.uint8 or tuple(block.shape) != (rows, g.row_bytes):
+                raise ValueError(
+                    f"{obj.id}: expected uint8 block rows [{rows}, {g.row_bytes}], "
+                    f"got {block.dtype} {tuple(block.shape)}"
+                )
+            self.write_bytes(row_begin * g.row_bytes, block.numpy().tobytes())
         elif isinstance(self.format, Nvfp4Format):
             if row_begin % 128 or rows % 128 or weight_divisor is None:
                 raise ValueError(

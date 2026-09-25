@@ -3,6 +3,7 @@
 #include "core/weight.h"
 #include "core/tensor.h"
 #include "ninfer/ops/linear.h"
+#include "ninfer/ops/weight_input.h"
 
 #include <cuda_runtime.h>
 
@@ -136,5 +137,17 @@ void attn_input_proj(const Tensor& x, const Weight& query_key_gate_value_weight,
  */
 void attn_input_proj(const Tensor& x, const Weight& query_key_value_weight, Tensor& q, Tensor& k,
                      Tensor& v, cudaStream_t stream);
+
+/**
+ * GGUF form: query, gate, key and value are parts of one or more GGUF parents (see
+ * GgufProjectionWeights; outputs 0 = q, 1 = gate, 2 = k, 3 = v), each block type its own, projected
+ * through the GGUF linear routes against one q8_1 quantization of x per activation layout.
+ */
+void attn_input_proj(const Tensor& x, const GgufProjectionWeights& weights, Tensor& q,
+                     Tensor& gate, Tensor& k, Tensor& v, WorkspaceArena& workspace,
+                     cudaStream_t stream);
+
+[[nodiscard]] std::size_t attn_input_proj_workspace_capacity_bytes(
+    const GgufProjectionWeights& weights, std::int32_t min_tokens, std::int32_t max_tokens);
 
 } // namespace ninfer::ops

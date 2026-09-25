@@ -23,6 +23,10 @@ void linear_topk_q4_launch(const Tensor& hidden, const Weight& head,
 void linear_topk_t2_launch(const Tensor& hidden, const Weight& head, std::int32_t valid_rows,
                            const Tensor* row_to_global_ids, Tensor& logits,
                            const LinearTopKWorkspace& workspace, cudaStream_t stream);
+// Top sixteen of already materialized BF16 logits [rows, columns] (rows = logits.ne[0]).
+void linear_topk_logits_launch(const Tensor& logits, std::int32_t valid_rows,
+                               const Tensor* row_to_global_ids,
+                               const LinearTopKWorkspace& workspace, cudaStream_t stream);
 void linear_topk_q4_m64_launch(const Tensor& hidden, const Weight& head,
                                const Tensor& row_to_global_ids,
                                const LinearTopKWorkspace& workspace, cudaStream_t stream);
