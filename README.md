@@ -57,6 +57,16 @@ otherwise; each number's setup and the full tables are in the
 
 ## What this line adds
 
+- **GGUF block formats.** Qwen3.8-27B GGUF releases that choose a ggml quantization type per tensor,
+  such as ISTA-DASLab's GSQ-RCO models, import without requantization: the converter recipe
+  `qwen3_8_27b_gguf` copies every quantized tensor's blocks unchanged, and the runtime multiplies
+  all fifteen dense ggml block types in place, decode and verification through a vector kernel that
+  decodes each weight once for every column, prompts through llama.cpp's integer tensor-core kernel.
+  MTP, DFlash2 and Vision work as with the official artifact. The 3.5-bit GSQ-RCO IQ3_S model scores
+  the WikiText-2 perplexity its card states (7.071 against 7.07; the official artifact scores 7.286)
+  at 10.95 GiB of weights instead of 15.9, and on the same card it decodes faster than the official
+  artifact: 59.9 against 40.3 tok/s on an RTX 3090 and 107.5 against 88.1 on an RTX 5090 without
+  speculation, 146 against 109 on an RTX 4090 with MTP. See [GGUF block formats](docs/gguf.md).
 - **Device route profiles for every GPU.** Which kernel schedule serves each operation and width
   is looked up in the card's measured profile before the compiled tables, which were tuned on one
   card. Profiles measured on the RTX 3090, 4090 and 5090 are built in; any other GPU is calibrated
@@ -319,12 +329,13 @@ driver or clock change. See [device profiles](docs/device-profiles.md).
 | model | artifact | notes |
 |---|---|---|
 | Ternary Bonsai 2 27B | [WaveCut/Ternary-Bonsai-2-27B-NInfer-v3](https://huggingface.co/WaveCut/Ternary-Bonsai-2-27B-NInfer-v3) | 8.87 GiB. Ternary text tower, token table and head, Vision, Bonsai-trained MTP head and DFlash2 adapter, and an exact proposal head. Runs only on this line. |
+| Qwen3.8-27B GSQ-RCO IQ3_S | [WaveCut/Qwen3.8-27B-GSQ-RCO-IQ3_S-NInfer-v3](https://huggingface.co/WaveCut/Qwen3.8-27B-GSQ-RCO-IQ3_S-NInfer-v3) | 13.99 GiB. ISTA-DASLab's 3.5-bit GGUF blocks kept byte for byte, their Q6_K MTP head, Vision, the DFlash2 adapter and a proposal head. Runs only on this line. |
 | Qwen3.8-27B | [neroued/Qwen3.8-27B-NInfer](https://huggingface.co/neroued/Qwen3.8-27B-NInfer) | 19 GiB, `groupwise-int` (Q4/Q5), the upstream artifact the reference tables use |
 | Qwen3.8-27B, abliterated | [WaveCut/Huihui-Qwen3.8-27B-abliterated-NInfer-v3](https://huggingface.co/WaveCut/Huihui-Qwen3.8-27B-abliterated-NInfer-v3) | 19.03 GiB, official `qwen3_8_27b` recipe with MTP, DFlash2 and a proposal head |
 
 The official NInfer artifacts listed in the original READMEs load here too.
-[Weight conversion](docs/weight-conversion.md#ternary-bonsai-2-27b) shows how the Bonsai artifact
-is built.
+Weight conversion shows how the [Bonsai](docs/weight-conversion.md#ternary-bonsai-2-27b) and
+[GSQ-RCO](docs/weight-conversion.md#a-mixed-precision-qwen38-27b-gguf) artifacts are built.
 
 ## Building
 
