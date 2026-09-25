@@ -60,6 +60,7 @@ The built-in recipes are ordinary Python functions in
 | `qwen3_6_27b_nvfp4` | Imported NVFP4, selected BF16 projections, Q8 vocabulary weights | `quantized` |
 | `qwen3_8_27b_nvfp4` | Imported NVFP4/FP8, FP8 embedding generated from BF16 | `quantized` |
 | `bonsai2_27b_ternary` | Imported ternary T2 text tower with Hadamard-rotated Uses, Q8 primal embedding | `ternary` (GGUF) |
+| `qwen3_8_27b_gguf` | Every text, embedding, head and MTP tensor in its GGUF block format, byte for byte | `gguf` (GGUF), `vision` (mmproj GGUF) |
 
 These names select conversion choices. Runtime execution is selected from the architecture,
 configuration and actual bindings stored in the artifact. `--name` sets the public model name;
@@ -155,6 +156,40 @@ with `--lm-head-draft`.
 
 A named source whose path ends in `.gguf` opens as a GGUF file; the recipe validates its header,
 tensor set and Hadamard metadata before reading anything.
+
+### A mixed-precision Qwen3.8-27B GGUF
+
+`qwen3_8_27b_gguf` ([`gguf_blocks.py`](../tools/convert/gguf_blocks.py)) imports a Qwen3.8-27B GGUF
+that assigns its own ggml block type to every tensor, such as ISTA-DASLab's
+[GSQ-RCO releases](https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF). The text
+projections, token table, output head and, in an `-mtp` file, the MTP head keep their blocks: each
+is stored as the matching `gguf_*` format in the `gguf_blocks_v1` layout, so a row of the artifact
+is a row of the GGUF, byte for byte, and nothing is requantized. All fifteen block types llama.cpp
+writes for dense models are supported: Q8_0, Q2_K to Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S,
+IQ3_XXS, IQ3_S, IQ4_NL and IQ4_XS. The recipe undoes llama.cpp's Qwen3.5 exporter conventions the
+same way `bonsai2_27b_ternary` does, by row gathers and exact small-tensor transforms. The one
+convention a row copy cannot undo is the tiled value-head order of the GDN output projection's
+input columns: its Use carries an `input_columns` auxiliary, and the runtime reads the activation
+through that permutation when it quantizes it. Vision comes from the release's `mmproj` file in the
+official Vision formats, DFlash2 from `--source dflash2`, and `--proposal` gathers the proposal
+head's rows from the output head in its own block format.
+
+```bash
+python3 -m tools.convert \
+  --model /path/to/Qwen3.8-27B \
+  --recipe qwen3_8_27b_gguf \
+  --source gguf=/path/to/Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf \
+  --source vision=/path/to/mmproj-Qwen3.8-27B-BF16.gguf \
+  --source dflash2=/path/to/Qwen3.8-27B-DFlash2 \
+  --components text,vision,mtp,dflash2 \
+  --resource chat_template.jinja=tools/chat_templates/qwen3_8.jinja \
+  --proposal \
+  --name qwen3.8-27b \
+  --out models/qwen3_8_27b_gsq_rco_iq3_s.ninfer
+```
+
+`--model` needs only the base checkpoint's configuration and tokenizer files. The products that
+serve these formats are described in [GGUF block formats](gguf.md).
 
 ## Change part of a recipe
 

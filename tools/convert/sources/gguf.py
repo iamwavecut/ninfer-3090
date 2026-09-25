@@ -22,6 +22,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from tools.artifact.formats import GGUF_FORMATS_BY_TYPE
+
 
 GGUF_MAGIC = b"GGUF"
 GGUF_VERSION = 3
@@ -33,12 +35,21 @@ TYPE_BF16 = 30
 TYPE_PQ2_0 = 142
 TYPE_PTQ1_0 = 143
 
+# ggml block types stored unchanged in a `gguf_blocks_v1` object, keyed by GGUF type id.
+BLOCK_FORMATS = {
+    fmt.ggml_type: fmt for fmt in GGUF_FORMATS_BY_TYPE.values()
+}
+
 TYPE_NAMES = {
     TYPE_F32: "F32",
     TYPE_F16: "F16",
     TYPE_BF16: "BF16",
     TYPE_PQ2_0: "PQ2_0",
     TYPE_PTQ1_0: "PTQ1_0",
+    **{
+        type_id: fmt.name.removeprefix("gguf_").upper()
+        for type_id, fmt in BLOCK_FORMATS.items()
+    },
 }
 TYPE_IDS = {name: type_id for type_id, name in TYPE_NAMES.items()}
 
@@ -49,6 +60,10 @@ BLOCK_GEOMETRY = {
     TYPE_BF16: (1, 2),
     TYPE_PQ2_0: (128, 34),
     TYPE_PTQ1_0: (128, 28),
+    **{
+        type_id: (fmt.block_elements, fmt.block_bytes)
+        for type_id, fmt in BLOCK_FORMATS.items()
+    },
 }
 TERNARY_GROUP = 128
 TERNARY_TYPES = frozenset((TYPE_PQ2_0, TYPE_PTQ1_0))
@@ -263,6 +278,22 @@ class GGUFFile:
         return np.ascontiguousarray(
             np.frombuffer(self.tensor_bytes(name), dtype="<u2").reshape(info.shape)
         )
+
+    def read_blocks(
+        self, name: str, row_begin: int = 0, row_end: int | None = None
+    ) -> np.ndarray:
+        """Rows ``[row_begin, row_end)`` of a ggml block matrix as ``uint8 [rows, row_bytes]``."""
+
+        info = self.info(name)
+        if info.type_id not in BLOCK_FORMATS:
+            raise ValueError(f"{name}: {info.type_name} is not a stored block format")
+        rows = info.shape[0]
+        end = rows if row_end is None else row_end
+        if not 0 <= row_begin <= end <= rows:
+            raise ValueError(f"{name}: row range [{row_begin},{end}) is outside {rows}")
+        row_bytes = self._row_bytes(info)
+        raw = self.tensor_bytes(name, row_begin * row_bytes, end * row_bytes)
+        return np.asarray(raw).reshape(end - row_begin, row_bytes)
 
     def read_ternary(
         self, name: str, row_begin: int = 0, row_end: int | None = None

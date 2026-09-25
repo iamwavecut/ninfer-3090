@@ -15,6 +15,9 @@ std::int32_t projection_input_rows(const ops::ProjectionWeights& projection) {
     if (const auto* single = std::get_if<LinearParameters>(&projection)) {
         return single->weight.k;
     }
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&projection)) {
+        return gguf->parts.front().weight.k;
+    }
     return std::get<ops::PairedProjectionWeights>(projection).first.k;
 }
 
@@ -23,7 +26,11 @@ std::size_t snapshot_scratch_bytes(const GdnParameters& parameters, const GdnCon
                                    std::int32_t batch, std::int32_t first_width,
                                    std::int32_t last_width) {
     std::size_t bytes;
-    if (const auto* pair = std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        bytes = ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(*gguf, batch,
+                                                                           first_width, last_width);
+    } else if (const auto* pair =
+                   std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
         bytes = ops::gdn_input_proj_split_conv_snapshot_workspace_capacity_bytes(
             pair->first.qtype, pair->second.qtype, pair->policy, batch, first_width, last_width);
     } else if (const auto& single = std::get<LinearParameters>(parameters.projection);
@@ -44,7 +51,11 @@ std::size_t record_scratch_bytes(const GdnParameters& parameters, const GdnConfi
                                  std::int32_t batch, std::int32_t first_width,
                                  std::int32_t last_width) {
     std::size_t bytes;
-    if (const auto* pair = std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        bytes = ops::gdn_input_proj_conv_record_workspace_capacity_bytes(*gguf, batch, first_width,
+                                                                         last_width);
+    } else if (const auto* pair =
+                   std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
         bytes = ops::gdn_input_proj_split_conv_record_workspace_capacity_bytes(
             pair->first.qtype, pair->second.qtype, pair->policy, batch, first_width, last_width);
     } else if (const auto& single = std::get<LinearParameters>(parameters.projection);
@@ -73,6 +84,8 @@ std::size_t gdn_projection_workspace_bytes(const GdnParameters& parameters, std:
         const auto& w = single->weight;
         inner = ops::gdn_input_proj_workspace_capacity_bytes(w.qtype, w.n, w.k, single->policy,
                                                              first, last);
+    } else if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        inner = ops::gdn_input_proj_workspace_capacity_bytes(*gguf, first, last);
     } else {
         const auto& pair = std::get<ops::PairedProjectionWeights>(parameters.projection);
         inner            = ops::gdn_input_proj_split_workspace_capacity_bytes(
@@ -106,7 +119,10 @@ void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tenso
     auto scope = workspace.scope();
     const Tensor x =
         rotated_input(hidden, projection_signs(parameters.projection), workspace, stream, basis);
-    if (const auto* pair = std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        ops::gdn_input_proj(x, *gguf, qkv, z, workspace, stream);
+    } else if (const auto* pair =
+                   std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
         ops::gdn_input_proj(x, pair->first, pair->second, qkv, z, pair->policy, workspace, stream);
     } else {
         const auto& single = std::get<LinearParameters>(parameters.projection);
@@ -148,7 +164,12 @@ void gdn_projection_snapshot(const Tensor& hidden, const GdnParameters& paramete
         rotated_input(hidden, projection_signs(parameters.projection), workspace, stream, basis);
     WorkspaceArena scratch(workspace.alloc_bytes(
         snapshot_scratch_bytes(parameters, config, hidden.ne[2], hidden.ne[1], hidden.ne[1])));
-    if (const auto* pair = std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        ops::gdn_input_proj_conv_snapshot(x, *gguf, parameters.convolution, conv_states,
+                                          valid_columns, initial_slots, destination_slots, query,
+                                          key, value, z, scratch, stream);
+    } else if (const auto* pair =
+                   std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
         ops::gdn_input_proj_conv_snapshot(
             x, pair->first, pair->second, parameters.convolution, conv_states, valid_columns,
             initial_slots, destination_slots, query, key, value, z, pair->policy, scratch, stream);
@@ -171,7 +192,12 @@ void gdn_projection_record(const Tensor& hidden, const GdnParameters& parameters
         rotated_input(hidden, projection_signs(parameters.projection), workspace, stream, basis);
     WorkspaceArena scratch(workspace.alloc_bytes(
         record_scratch_bytes(parameters, config, hidden.ne[2], hidden.ne[1], hidden.ne[1])));
-    if (const auto* pair = std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        ops::gdn_input_proj_conv_record(x, *gguf, parameters.convolution, conv_states,
+                                        valid_columns, initial_slots, conv_record, query, key,
+                                        value, z, scratch, stream);
+    } else if (const auto* pair =
+                   std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
         ops::gdn_input_proj_conv_record(x, pair->first, pair->second, parameters.convolution,
                                         conv_states, valid_columns, initial_slots, conv_record,
                                         query, key, value, z, pair->policy, scratch, stream);

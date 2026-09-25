@@ -9,7 +9,13 @@ from math import prod
 from typing import Sequence
 
 from tools.artifact.layouts import encoded_size
-from tools.artifact.formats import DirectFormat, Fp8RowFormat, Nvfp4Format, get_format
+from tools.artifact.formats import (
+    DirectFormat,
+    Fp8RowFormat,
+    GgufFormat,
+    Nvfp4Format,
+    get_format,
+)
 from tools.artifact.schema import ACTIVATION_POLICIES, TensorSpec
 from .methods import (
     AuxiliaryValue,
@@ -63,6 +69,8 @@ def default_layout(format: str) -> str:
         return "row_scale_v1"
     if isinstance(kind, Nvfp4Format):
         return "block_scale_k16_m128x4_v1"
+    if isinstance(kind, GgufFormat):
+        return "gguf_blocks_v1"
     return "row_split_k128_v1"
 
 

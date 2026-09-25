@@ -83,6 +83,7 @@ std::string prefill_signature(const Model& model) {
             Json fact = {use.input, use.policy, use.activation_input_divisor.has_value()};
             // Only a rotated Use adds a fact, so every unrotated signature stays what it was.
             if (use.hadamard_signs) { fact.push_back("hadamard_1024"); }
+            if (use.input_columns) { fact.push_back("input_columns"); }
             item["uses"].push_back(std::move(fact));
         }
         inventory.push_back(std::move(item));

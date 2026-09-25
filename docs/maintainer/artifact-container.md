@@ -468,6 +468,12 @@ Walsh-Hadamard 变换）而不是原始输入。同一向量可被任意多个�
 }
 ```
 
+`input_columns` 标记按置换后的输入列存储的 GGUF 矩阵：Binding 为 `format=int32,
+layout=contiguous_le_v1, shape=[K]`，元素是 0..K-1 的一个排列。该用途的存储列 c 乘以输入元素
+`input_columns[c]`，运行时在量化激活时按此排列读取输入，矩阵本身不重排也不重新量化。同一向量可被
+任意多个用途引用，loader 只绑定一次。目前只有 `gguf_*` 格式的矩阵接受它：llama.cpp 导出 Qwen3.5
+时把 GDN 输出投影的输入列排成 tiled 的 value head 顺序，逐行复制无法还原。
+
 DFlash/DFlash2 的 query K/V 使用 `attention/key`、`attention/value`，context K/V 使用
 `attention/context_key`、`attention/context_value`，各自建立 Binding 和 Use。
 两组绑定可以共享 parent 区域，也可以独立选择表示，见第 12.5 节。

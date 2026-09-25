@@ -30,6 +30,8 @@ struct WeightUse {
     std::optional<float> activation_input_divisor;
     // BF16 [K] sign vector of a Hadamard-rotated matrix, bound as its own device weight.
     std::optional<WeightId> hadamard_signs;
+    // INT32 [K] input gather of a GGUF matrix stored over permuted input columns.
+    std::optional<WeightId> input_columns;
 };
 
 struct BoundWeight {

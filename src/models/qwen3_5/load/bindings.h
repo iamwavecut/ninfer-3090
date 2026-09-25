@@ -54,9 +54,13 @@ private:
     // One device weight per distinct sign binding, however many Uses name it.
     WeightId hadamard_signs(const artifact::Binding& binding, std::uint64_t width,
                             const std::string& use);
+    // One device weight per distinct input-gather binding, the same way.
+    WeightId input_columns(const artifact::Binding& binding, std::uint64_t width,
+                           const std::string& use);
 
     std::map<std::string, WeightId, std::less<>> parameters_;
     std::map<std::string, WeightId, std::less<>> signs_;
+    std::map<std::string, WeightId, std::less<>> columns_;
 };
 
 [[nodiscard]] AttentionWeights bind_attention(Bindings& bindings, const TextConfig& config,

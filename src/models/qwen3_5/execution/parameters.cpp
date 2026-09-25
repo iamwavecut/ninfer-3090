@@ -3,7 +3,9 @@
 
 #include "core/weight_view.h"
 
+#include <array>
 #include <limits>
+#include <type_traits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -123,7 +125,28 @@ public:
         });
     }
 
+    static bool gguf(const ops::WeightInput& input) {
+        return !input.weight.parts.empty() && input.weight.parts.front().parent != nullptr &&
+               is_gguf(input.weight.parts.front().parent->geometry.format);
+    }
+
     DenseParameters dense(const DenseWeights& w) const {
+        if (const auto gate = model_.rotated_input(w.gate); gguf(gate)) {
+            return with_context(model_.weight(w.gate).name, [&] {
+                const auto up = model_.rotated_input(w.up);
+                const std::array inputs{gate, up};
+                DenseParameters out;
+                if (ops::joins(inputs)) {
+                    out.gate_up = ops::prepare_linear_swiglu_weight(gate, up);
+                } else {
+                    out.gate_up = ops::prepare_linear_weight(gate);
+                    out.up      = ops::prepare_linear_weight(up);
+                }
+                out.down                  = rotated_linear(w.down);
+                out.verify_gate_up_policy = out.gate_up.policy;
+                return out;
+            });
+        }
         DenseParameters out{with_context(model_.weight(w.gate).name,
                                          [&] {
                                              return ops::prepare_linear_swiglu_weight(
@@ -218,9 +241,18 @@ public:
     }
 
     ops::SparseMoeHints prefetch(const ops::ProjectionWeights& projection, WeightId query) const {
-        const auto* single = std::get_if<LinearParameters>(&projection);
-        const auto& weight =
-            single ? single->weight : std::get<ops::PairedProjectionWeights>(projection).first;
+        const Weight& weight = std::visit(
+            [](const auto& p) -> const Weight& {
+                using Kind = std::decay_t<decltype(p)>;
+                if constexpr (std::is_same_v<Kind, ops::SingleProjectionWeight>) {
+                    return p.weight;
+                } else if constexpr (std::is_same_v<Kind, ops::PairedProjectionWeights>) {
+                    return p.first;
+                } else {
+                    return p.parts.front().weight;
+                }
+            },
+            projection);
         const auto& geometry = model_.weight(query).view.parts.front().parent->geometry;
         const auto row_bytes = geometry.layout == QuantLayout::Contiguous
                                    ? std::uint64_t(weight.k) * dtype_size(DType::BF16)
@@ -239,7 +271,10 @@ public:
         out.input_norm          = tensor(w.layer.input_norm);
         out.post_attention_norm = tensor(w.layer.post_attention_norm);
         out.final_norm          = tensor(w.final_norm);
-        out.projection.packed   = ops::prepare_linear_weight(inputs);
+        // GGUF parts of different block types have no packed parent; the rows below serve alone.
+        if (!gguf(inputs[0]) || ops::joins(inputs)) {
+            out.projection.packed = ops::prepare_linear_weight(inputs);
+        }
         if (model_.config().text.architecture == Architecture::Qwen3_5) {
             out.projection.rows = {linear(a.query), linear(a.key), linear(a.gate), linear(a.value)};
         }

@@ -73,6 +73,25 @@ std::size_t ffn_workspace_bytes(const FfnParameters& parameters, std::int32_t fi
     if (rotated_dense(p)) { return rotated_dense_workspace_bytes(p, first, last); }
     const auto& gu   = p.gate_up.weight;
     const auto& down = p.down.weight;
+    if (is_gguf(gu.qtype)) {
+        WorkspaceLayoutBuilder layout;
+        const std::int32_t rows = p.up ? gu.n : gu.n / 2;
+        (void)layout.alloc(DType::BF16, {rows, last});
+        {
+            auto scope = layout.scope();
+            (void)layout.alloc_bytes(
+                p.up ? ops::linear_swiglu_pair_workspace_capacity_bytes(
+                           gu.qtype, p.up->weight.qtype, gu.n, gu.k, p.gate_up.policy, first, last)
+                     : ops::linear_swiglu_workspace_capacity_bytes(gu.qtype, gu.n, gu.k,
+                                                                   p.gate_up.policy, first, last));
+        }
+        {
+            auto scope = layout.scope();
+            (void)layout.alloc_bytes(ops::linear_add_workspace_capacity_bytes(
+                down.qtype, down.n, down.k, p.down.policy, first, last));
+        }
+        return layout.peak_bytes(1);
+    }
     WorkspaceLayoutBuilder layout;
     if (mtp || gu.qtype == QType::Q6_G64_FP16) {
         (void)layout.alloc(DType::BF16, {gu.n, last});
@@ -135,6 +154,20 @@ void ffn(const Tensor& hidden, const FfnParameters& parameters, Tensor& residual
     }
     const auto& gu   = p.gate_up.weight;
     const auto& down = p.down.weight;
+    if (is_gguf(gu.qtype)) {
+        Tensor activation = workspace.alloc(DType::BF16, {p.up ? gu.n : gu.n / 2, columns});
+        {
+            auto call = workspace.scope();
+            if (p.up) {
+                ops::linear_swiglu(hidden, gu, p.up->weight, activation, p.gate_up.policy,
+                                   workspace, stream);
+            } else {
+                ops::linear_swiglu(hidden, gu, activation, p.gate_up.policy, workspace, stream);
+            }
+        }
+        ops::linear_add(activation, down, residual, p.down.policy, workspace, stream);
+        return;
+    }
     if (mtp || gu.qtype == QType::Q6_G64_FP16) {
         Tensor gate_up = workspace.alloc(DType::BF16, {gu.n, columns});
         {

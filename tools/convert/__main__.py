@@ -16,13 +16,14 @@ from .qwen3_5 import build_model
 from .recipe import Recipe
 from .sources.gguf import GGUFFile
 from .sources.safetensors import SafetensorsSource
+from .gguf_blocks import RECIPES as GGUF_RECIPES
 from .ternary import RECIPES as TERNARY_RECIPES
 
 
 def _open_named_source(name: str, path: Path):
     if path.suffix == ".gguf":
-        # The ternary recipe reads PrismML's block formats itself, without gguf-py.
-        if name == "ternary":
+        # The ternary and GGUF block recipes read their block formats themselves, without gguf-py.
+        if name in ("ternary", "gguf"):
             return GGUFFile(path)
         from .sources.gguf_source import GGUFSource
 
@@ -72,7 +73,7 @@ def _pairs(values, label):
 
 
 def _function(value: str):
-    recipes = {**RECIPES, **TERNARY_RECIPES}
+    recipes = {**RECIPES, **TERNARY_RECIPES, **GGUF_RECIPES}
     if value in recipes:
         return recipes[value]
     filename, separator, function = value.rpartition(":")

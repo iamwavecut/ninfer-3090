@@ -16,6 +16,7 @@ from typing import Callable, Mapping
 import torch
 
 from tools.artifact.formats import (
+    GGUF_FORMATS,
     DirectFormat,
     QuantFormat,
     get_format,
@@ -241,11 +242,11 @@ def fp8_row_maxabs(request: PrepareRequest) -> PreparedMethod:
 
 
 def import_encoded(request: PrepareRequest) -> PreparedMethod:
-    """Preserve the current FP8/NVFP4/T2 source codes, scales and weight divisor."""
+    """Preserve the current FP8/NVFP4/T2/GGUF source codes, scales and weight divisor."""
     if (
         request.target.format not in ("nvfp4", "fp8_e4m3fn_row_bf16", "t2_g128_fp16")
-        or len(request.target.shape) != 2
-    ):
+        and request.target.format not in GGUF_FORMATS
+    ) or len(request.target.shape) != 2:
         raise ValueError("import_encoded requires a known encoded matrix target")
     _preflight(request, values=False)
     auxiliaries = {}

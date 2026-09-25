@@ -47,6 +47,11 @@ std::size_t attention_projection_workspace_bytes(const AttentionParameters& para
         throw std::invalid_argument("attention projection: invalid column interval");
     }
     const Tensor& signs = projection_signs(parameters.projection);
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        return rotated_workspace_bytes(
+            signs, gguf->parts.front().weight.k, last,
+            ops::attn_input_proj_workspace_capacity_bytes(*gguf, first, last));
+    }
     if (const auto* single = std::get_if<LinearParameters>(&parameters.projection)) {
         const auto& weight = single->weight;
         return rotated_workspace_bytes(
@@ -67,7 +72,10 @@ void attention_projection(const Tensor& hidden, const AttentionParameters& param
     auto scope = workspace.scope();
     const Tensor x =
         rotated_input(hidden, projection_signs(parameters.projection), workspace, stream, basis);
-    if (const auto* pair = std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
+    if (const auto* gguf = std::get_if<ops::GgufProjectionWeights>(&parameters.projection)) {
+        ops::attn_input_proj(x, *gguf, query, gate, key, value, workspace, stream);
+    } else if (const auto* pair =
+                   std::get_if<ops::PairedProjectionWeights>(&parameters.projection)) {
         ops::attn_input_proj(x, pair->first, pair->second, query, gate, key, value, pair->policy,
                              workspace, stream);
     } else {

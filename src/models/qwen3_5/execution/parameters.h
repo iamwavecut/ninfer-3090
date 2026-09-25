@@ -29,6 +29,8 @@ struct DenseParameters {
     // independently of --prefill-a8, so long as the profile is eligible; prefill and scoring
     // always use gate_up.policy and never take the decode-width integer route.
     ops::LinearPolicy verify_gate_up_policy = ops::LinearPolicy::A16Only;
+    // The up matrix when gate and up are separate GGUF parents; gate_up then holds the gate alone.
+    std::optional<LinearParameters> up;
 };
 
 using FfnParameters = std::variant<DenseParameters, ops::SparseMoeWeights>;

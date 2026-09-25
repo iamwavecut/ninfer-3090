@@ -239,6 +239,19 @@ can share it:
 A rotated Use anywhere else, including MoE experts, is refused at load time. A token embedding
 stored rotated is converted back to the primal basis by the converter.
 
+## GGUF block checkpoints
+
+An artifact converted with `qwen3_8_27b_gguf` stores its text projections, token table, output head
+and MTP head in `gguf_*` formats, one ggml type per tensor, so the parts of a fused projection can
+differ in type. The execution layer keeps each GGUF part as its own weight
+(`ops::GgufProjectionWeights`): the GDN input projection lands q/k/v (output 0) and z (output 1)
+rows, the attention projection query, gate, key and value, and parts that are contiguous rows of one
+parent run as one product. FFN gate and up run as one `[gate; up]` product when they are one
+parent, otherwise the gate writes an FP32 plane that the up product's epilogue multiplies by
+`silu`. The MTP layer's projections stay separate unless they join the same way. The GDN output
+projection reads its input through the Use's `input_columns` permutation (llama.cpp's tiled value
+heads), applied while the activation is quantized.
+
 ## Prefill, decode and MTP
 
 Text prefill gathers embedding columns, replaces media placeholders with Vision outputs, and runs

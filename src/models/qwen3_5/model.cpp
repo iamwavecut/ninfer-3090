@@ -22,7 +22,12 @@ ops::WeightInput Model::input(WeightUseId id) const {
         throw std::invalid_argument(parameter.name + "@" + use.input +
                                     ": a Hadamard-rotated matrix is not supported at this input");
     }
-    return {parameter.view, use.policy, use.activation_input_divisor};
+    ops::WeightInput result{parameter.view, use.policy, use.activation_input_divisor};
+    if (use.input_columns) {
+        const auto& columns  = weight(*use.input_columns).view;
+        result.input_columns = weight_tensor(columns, {static_cast<std::int32_t>(columns.shape[0])});
+    }
+    return result;
 }
 
 ops::WeightInput Model::input(WeightId id) const {
@@ -44,6 +49,10 @@ ops::WeightInput Model::rotated_input(WeightUseId id) const {
                                         ": Hadamard signs must cover the input width");
         }
         result.hadamard_signs = weight_tensor(signs, {static_cast<std::int32_t>(signs.shape[0])});
+    }
+    if (use.input_columns) {
+        const auto& columns  = weight(*use.input_columns).view;
+        result.input_columns = weight_tensor(columns, {static_cast<std::int32_t>(columns.shape[0])});
     }
     return result;
 }
