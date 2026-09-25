@@ -350,6 +350,23 @@ if [[ -n "${NINFER_TEST_FAKE_SIZE:-}" ]]; then
 fi
 CURL
 chmod +x "$tmp/bin/curl"
+# download-model.sh prefers aria2c when it is on PATH, as it is on hosted runners; its stub writes the
+# same payload to -d/-o so no case reaches the network.
+cat > "$tmp/bin/aria2c" <<'ARIA2C'
+#!/usr/bin/env bash
+while (( $# )); do
+  case "$1" in
+    -d) dir="$2"; shift 2 ;;
+    -o) name="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+: > "$dir/$name"
+if [[ -n "${NINFER_TEST_FAKE_SIZE:-}" ]]; then
+  truncate -s "$NINFER_TEST_FAKE_SIZE" "$dir/$name"
+fi
+ARIA2C
+chmod +x "$tmp/bin/aria2c"
 # Stubs sha256sum for the checksum-rejection fixture below. verify() hashes whatever it is given,
 # and a real sha256sum reads every logical byte even of a sparse file -- tens of GB per downloader,
 # which is instant to allocate but not free to read, and turned this fixture into a multi-minute
@@ -419,11 +436,12 @@ for bad in '' 'qwen38-27' 'qwen3_8_27b'; do
   fi
 done
 
-# An artifact that already verifies is left alone: no download, not even an attempted one. The curl
-# stub in this directory fails every call, so a script that fetched again would exit non-zero.
+# An artifact that already verifies is left alone: no download, not even an attempted one. The
+# fetchers in this directory fail every call, so a script that fetched again would exit non-zero.
 mkdir -- "$tmp/failing-curl"
 printf '#!/usr/bin/env bash\nexit 22\n' > "$tmp/failing-curl/curl"
-chmod +x "$tmp/failing-curl/curl"
+cp -- "$tmp/failing-curl/curl" "$tmp/failing-curl/aria2c"
+chmod +x "$tmp/failing-curl/curl" "$tmp/failing-curl/aria2c"
 for key in "${models[@]}"; do
   model="$(artifact_of "$key")"
   size="$(expected_size_of "$key")"
