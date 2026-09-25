@@ -18,6 +18,11 @@ struct WindowPlan {
 [[nodiscard]] std::vector<WindowPlan> plan_windows(std::size_t tokens, std::uint32_t context,
                                                    std::uint32_t stride);
 
+// Back-to-back windows of `context` tokens, each scored from its second token on, and no partial
+// window at the end: the protocol of the GPTQ-lineage WikiText-2 numbers papers quote.
+[[nodiscard]] std::vector<WindowPlan> plan_disjoint_windows(std::size_t tokens,
+                                                            std::uint32_t context);
+
 struct ScoreAggregate {
     std::uint64_t scored_tokens = 0;
     double total_nll            = 0.0;

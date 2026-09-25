@@ -45,6 +45,16 @@ report is `report.json` under `profiles/perplexity/` unless `--output` supplies 
 For KV-format comparisons, the recommended long-context profile is the full corpus with
 `--context 65536 --stride 32768` and without `--quick`.
 
+`--disjoint` replaces the sliding windows with back-to-back windows of `--context` tokens, each
+scored from its second token on, and drops a partial window at the end. That is the protocol of
+the WikiText-2 perplexities quantization papers and model cards quote (GPTQ lineage: the test rows
+joined by blank lines, 2,048-token windows). With the test split written to a file:
+
+```bash
+./build/apps/ninfer-perplexity models/qwen3_8_27b_gsq_rco_iq3_s.ninfer \
+  --text wiki.test.joined.txt --context 2048 --disjoint --kv-dtype bf16
+```
+
 ## Metric
 
 For a stream `x[0..N)`, every token after `x[0]` is scored exactly once. A window `[b,e)` with target

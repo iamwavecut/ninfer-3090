@@ -61,6 +61,16 @@ int main() {
                             "window boundaries match the protocol");
     }
 
+    const auto disjoint = ninfer::perplexity::plan_disjoint_windows(10, 4);
+    failures += require(disjoint.size() == 2, "disjoint windows drop the partial tail");
+    for (std::size_t index = 0; index < disjoint.size(); ++index) {
+        const auto& window = disjoint[index];
+        failures += require(window.input_begin == 4 * index && window.input_end == 4 * index + 4 &&
+                                window.target_begin == window.input_begin + 1 &&
+                                window.target_end == window.input_end && window.first_target == 1,
+                            "disjoint windows score from their second token");
+    }
+
     const std::vector<float> first{-1.0F, -2.0F};
     const std::vector<float> second{-3.0F};
     ninfer::perplexity::ScoreAggregate a;

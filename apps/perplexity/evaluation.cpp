@@ -41,6 +41,20 @@ std::vector<WindowPlan> plan_windows(std::size_t tokens, std::uint32_t context,
     return windows;
 }
 
+std::vector<WindowPlan> plan_disjoint_windows(std::size_t tokens, std::uint32_t context) {
+    if (context < 2) { throw std::invalid_argument("perplexity requires context>=2"); }
+    if (tokens < context) { throw std::invalid_argument("stream is shorter than one window"); }
+    std::vector<WindowPlan> windows;
+    for (std::size_t begin = 0; begin + context <= tokens; begin += context) {
+        windows.push_back(WindowPlan{.input_begin  = begin,
+                                     .input_end    = begin + context,
+                                     .target_begin = begin + 1,
+                                     .target_end   = begin + context,
+                                     .first_target = 1});
+    }
+    return windows;
+}
+
 void ScoreAggregate::add(std::span<const float> logprobs) {
     for (const float logprob : logprobs) {
         if (!std::isfinite(logprob)) {

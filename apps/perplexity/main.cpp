@@ -46,6 +46,7 @@ struct Options {
     std::optional<std::filesystem::path> output;
     std::uint32_t context     = 4096;
     std::uint32_t stride      = 2048;
+    bool disjoint             = false;
     int device                = 0;
 #if defined(NINFER_SM8X_COMPAT)
     // FP8 E4M3 KV attention has no SM86 implementation, so the upstream default would fail at
@@ -73,7 +74,7 @@ struct Options {
 std::string usage_text() {
     return "usage: ninfer-perplexity <model.ninfer> "
            "(--corpus <manifest.json> [--quick] | --text <utf8-file>)\n"
-           "       [--context N] [--stride N] [--device N]\n"
+           "       [--context N] [--stride N | --disjoint] [--device N]\n"
            "       [--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4] [--output <directory>]\n"
            "       [--lm-head-q4|--lm-head-q6] [--embedding-q4|--embedding-q6] [--mtp-experts-q4] [--gdn-state-fp16]\n"
            "       [--mlp-a8-decode] [--no-prefill-a8] [--rope-yarn]\n"
@@ -127,6 +128,8 @@ Options parse_options(int argc, char** argv) {
             out.context = parse_integer<std::uint32_t>(value("--context"), "context");
         } else if (option == "--stride") {
             out.stride = parse_integer<std::uint32_t>(value("--stride"), "stride");
+        } else if (option == "--disjoint") {
+            out.disjoint = true;
         } else if (option == "--device") {
             out.device = parse_integer<int>(value("--device"), "device");
         } else if (option == "--fast-prefill-kernel") {
@@ -189,7 +192,8 @@ Options parse_options(int argc, char** argv) {
         usage_error("exactly one of --corpus and --text is required");
     }
     if (out.quick && !out.corpus) { usage_error("--quick requires --corpus"); }
-    if (out.context < 2 || out.stride == 0 || out.stride >= out.context) {
+    if (out.context < 2 ||
+        (!out.disjoint && (out.stride == 0 || out.stride >= out.context))) {
         usage_error("context/stride must satisfy context>=2 and 1<=stride<context");
     }
     return out;
@@ -327,9 +331,13 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
             throw std::runtime_error("stream tokenized to fewer than two tokens: " + source.id);
         }
         std::vector<WindowPlan> windows =
-            ninfer::perplexity::plan_windows(tokens.size(), options.context, options.stride);
+            options.disjoint
+                ? ninfer::perplexity::plan_disjoint_windows(tokens.size(), options.context)
+                : ninfer::perplexity::plan_windows(tokens.size(), options.context, options.stride);
         total_input_tokens += static_cast<std::uint64_t>(tokens.size());
-        total_scored_tokens += static_cast<std::uint64_t>(tokens.size() - 1);
+        for (const WindowPlan& window : windows) {
+            total_scored_tokens += static_cast<std::uint64_t>(window.target_end - window.target_begin);
+        }
         total_windows += static_cast<std::uint64_t>(windows.size());
         streams.push_back(EvaluationStream{.source  = std::move(source),
                                            .tokens  = std::move(tokens),
@@ -476,7 +484,8 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
           {"device", options.device},
           {"context_tokens", options.context},
           {"fast_prefill_kernel", options.fast_prefill_kernel},
-          {"stride_tokens", options.stride},
+          {"stride_tokens", options.disjoint ? options.context : options.stride},
+          {"windows", options.disjoint ? "disjoint" : "sliding"},
           {"prefill_chunk_tokens", 1024},
           {"score_tile_tokens", 1024},
           {"kv_dtype", kv_name(options.kv)}}},
@@ -506,8 +515,9 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     std::cout << "Perplexity result\n"
               << "artifact: " << load.model_name << '\n'
               << "kv: " << kv_name(options.kv) << ", corpus: " << corpus.corpus_id << " / "
-              << corpus.mode << ", context/stride: " << options.context << '/' << options.stride
-              << "\n\n";
+              << corpus.mode << ", context/stride: " << options.context << '/'
+              << (options.disjoint ? options.context : options.stride)
+              << (options.disjoint ? " (disjoint windows)" : "") << "\n\n";
     std::cout << std::left << std::setw(24) << "domain" << std::right << std::setw(16) << "tokens"
               << std::setw(16) << "mean_nll" << std::setw(16) << "ppl" << '\n';
     for (const auto& [domain, aggregate] : domains) {
