@@ -1,4 +1,4 @@
-# NInfer-3090 consolidated
+# NInfer-all
 
 One line of [NInfer](https://github.com/Neroued/ninfer) for the RTX 3090, RTX 4090 and RTX 5090,
 consolidated from the forks that carry it and extended with this repository's own work. The base is
