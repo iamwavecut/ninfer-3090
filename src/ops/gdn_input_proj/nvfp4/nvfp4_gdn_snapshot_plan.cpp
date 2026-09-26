@@ -42,9 +42,9 @@ Nvfp4GdnConvPlan nvfp4_gdn_conv_resolve_plan(LinearPolicy policy, std::int32_t t
         // This one is normally unreachable because the SwiGLU throws first, so a reader
         // who lands here has fixed that one and needs to know this is the next wall.
         throw std::invalid_argument(
-            "nvfp4 gdn conv: the A16 route is registered only through T=16, and on sm_86 A16 is "
-            "the only policy available for NVFP4 weights, so this artifact cannot serve a prefill "
-            "chunk wider than 16 columns on this architecture. See TODO.md section 1.");
+            "nvfp4 gdn conv: the A16 route is registered only through T=16, and on sm_80/86/89 A16 "
+            "is the only policy available for NVFP4 weights, so this artifact cannot serve a "
+            "prefill chunk wider than 16 columns on this architecture. See TODO.md section 1.");
     }
     if (tokens == 1) { return {Nvfp4GdnConvScheduleId::DecodeFusedA16}; }
     if (tokens <= 3) { return {Nvfp4GdnConvScheduleId::SmallTFusedA16}; }

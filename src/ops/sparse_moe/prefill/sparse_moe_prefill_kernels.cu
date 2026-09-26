@@ -1721,14 +1721,14 @@ void launch_sparse_moe_prefill_nvfp4(const __nv_bfloat16* input, const SparseMoe
                                      const float* shared_scale, __nv_bfloat16* grouped_io,
                                      float* /*routed_sum*/, Nvfp4PrefillPlanes planes,
                                      cudaStream_t stream) {
-#if defined(NINFER_SM8X_COMPAT)
+#if defined(NINFER_SM8X_COMPAT) && !defined(NINFER_SM120_NVFP4)
     // The route runs W4A4 on the Blackwell FP4 tensor-core instruction, which sm_8x does not have;
     // binding refuses the profile on this build before any call reaches here.
     (void)input, (void)weights, (void)destination, (void)tokens, (void)assignments;
     (void)max_route_jobs, (void)packed_token, (void)offsets, (void)route_job_experts;
     (void)route_job_columns, (void)route_job_count, (void)packed_index, (void)alpha;
     (void)shared_scale, (void)grouped_io, (void)planes, (void)stream;
-    throw std::logic_error("sparse_moe: the NVFP4 prefill route needs a native sm_120 build");
+    throw std::logic_error("sparse_moe: the NVFP4 prefill route needs an sm_120a build");
 #else
     const Nvfp4Jobs jobs{route_job_experts, route_job_columns, route_job_count};
 

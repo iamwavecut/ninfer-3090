@@ -226,11 +226,10 @@ From other forks:
 - **Rolling retention.** `--context-cache-policy rolling` lets one long conversation keep rolling
   its cached frontier forward (IMGillusion).
 - **NVFP4 expert banks on Blackwell** (upstream PRs #286-#290 by Mykhailo Dementii). The published
-  Qwen3.6-35B-A3B NVFP4 checkpoint converts with `--recipe qwen3_6_35b_a3b_nvfp4` and runs on a
-  native build (`-DCMAKE_CUDA_ARCHITECTURES=120a -DNINFER_SM120_NATIVE=ON`): on an RTX 5090 the
-  20.6 GB text artifact prefilled 27,663 tok/s at 4K and decoded 397 tok/s. Its prefill
-  quantizes activations to four bits for W4A4, which only Blackwell has, so builds on the
-  compatibility path (sm_8x, and sm_120a without `NINFER_SM120_NATIVE`) refuse the banks.
+  Qwen3.6-35B-A3B NVFP4 checkpoint converts with `--recipe qwen3_6_35b_a3b_nvfp4` and runs on any
+  `120a` build: on an RTX 5090 (native build, `-DNINFER_SM120_NATIVE=ON`) the 20.6 GB text
+  artifact prefilled 27,663 tok/s at 4K and decoded 397 tok/s. Its prefill quantizes activations
+  to four bits for W4A4, which only Blackwell has, so sm_8x builds refuse the banks.
 - **Engine and serving fixes**: out-of-memory recovery of the worker (Gideon Zenz's, ported by
   Ian Ranson), `--kv-headroom-mib`, `--cuda-graph-allowance-mib`, `--thinking-budget-message` (Ian
   Ranson); the WebUI's MCP traffic relayed behind `--webui-mcp-proxy`, E8 root codes decoded from

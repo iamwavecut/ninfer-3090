@@ -118,7 +118,7 @@ CMake configure command as `-DNAME=VALUE`.
 | `NINFER_NVCC_SPLIT_COMPILE=N` | nvcc optimizes one translation unit on N threads (`--split-compile`); `0` is every core, which a parallel ninja multiplies by its job count |
 | `NINFER_PTXAS_VERBOSE=ON` | ptxas reports each kernel's registers and local-memory spills |
 | `NINFER_WEBUI_DIR=PATH` | compiles the WebUI in that directory (an `index.html` or `index.html.gz` at its root) into the server |
-| `NINFER_SM120_NATIVE=ON` | on a `120a` build, compiles the Blackwell FP8/NVFP4 units instead of the `mma.sync` path |
+| `NINFER_SM120_NATIVE=ON` | on a `120a` build, compiles the Blackwell FP8 units and upstream's native routes instead of the `mma.sync` path (every `120a` build compiles the NVFP4 W4A4 units) |
 | `NINFER_D3D12_RESIDENCY=ON` | Windows: offers `--wddm-evictable-budget`, device arenas from a D3D12 heap held resident |
 | `NINFER_DIRECTSTORAGE=ON` | Windows: fetches the DirectStorage 1.3 runtime and offers `--disk-kv-directstorage` for disk-tier restores |
 

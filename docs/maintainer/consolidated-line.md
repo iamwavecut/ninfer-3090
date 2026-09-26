@@ -89,7 +89,7 @@ their authorship:
 | #199 | sparse MoE keeps Q4 group quads in flight in the routed gate/up dot product and on the T = 1 path | Mykhailo Dementii |
 | #264, #273 | a partial last M tile in the fused NVFP4 SwiGLU TMA route; the text profile of `rmsnorm_rope` | Mykhailo Dementii |
 | #268 | the attention output gate applied by the small-T reduce epilogue on BF16 and INT8 caches, bit-identical to the separate multiply | Mykhailo Dementii |
-| #286-#290 | NVFP4 sparse-MoE expert banks: one divisor per stacked source matrix in the artifact, an NVFP4 profile for decode and the small-token route (CUDA cores, every build) and for prefill (W4A4, native sm_120 builds only; sm_8x builds refuse the banks at bind), and the `qwen3_6_35b_a3b_nvfp4` recipe. The decode codec sits beside the row-split codecs instead of coming through #286's refactor, so the groupwise profiles compile to the same kernels | Mykhailo Dementii |
+| #286-#290 | NVFP4 sparse-MoE expert banks: one divisor per stacked source matrix in the artifact, an NVFP4 profile for decode and the small-token route (CUDA cores, every build) and for prefill (W4A4, every sm_120a build; sm_8x builds refuse the banks at bind), and the `qwen3_6_35b_a3b_nvfp4` recipe. The decode codec sits beside the row-split codecs instead of coming through #286's refactor, so the groupwise profiles compile to the same kernels | Mykhailo Dementii |
 | #282 | GGUF (any ggml quant level) as a conversion source | giveen |
 | #284 | the `qwen3_8_27b_q6` recipe with a fused Q6 gate/up shape and tuned Q6 dispatch | bingchengcc |
 | #294 | structured output through xgrammar, speculative decoding included, opt-in with `--structured-output` | Andrey Shvartsman |
@@ -172,6 +172,7 @@ and have not been run.
 | graphs | MTP draft windows past eight verify columns build one CUDA Graph executable per profile (Mykhailo Dementii's topology classes, #221, cover up to eight) | `models/qwen3_5/program/planning/graph_profiles.cpp` |
 | graphs | MTP and one-token decode profiles share an executable only when every attention call they capture takes the same route, as `causal_softmax_attention_route_family` reports for the model's geometry and KV storage (BF16 takes the prompt kernel up to 128 keys); MTP class ids get a per-width stride of 64 | `models/qwen3_5/program/planning/graph_profiles.cpp`, `graphs.cpp`, `startup.cpp`, `ops/.../causal_softmax_attention.cpp` |
 | build | the INT8 small-T launch compiles in 28 units (width, geometry, input) | `ops/softmax_attention/sources.cmake` |
+| build | every `120a` build compiles the NVFP4 W4A4 units (`NINFER_SM120_NVFP4`), the default compatibility path included, and an NVFP4 weight keeps its stored A4 permission there; before, an NVFP4 artifact failed at runtime planning on that path because the A16 SwiGLU route stops at 16 columns. FP8 A8 still needs `NINFER_SM120_NATIVE` | `CMakeLists.txt`, `ops/CMakeLists.txt`, `models/qwen3_5/load/prepare.cpp`, `ops/linear/nvfp4/nvfp4_launch.cuh`, `ops/weight_input.cpp`, `ops/wrapper/sparse_moe.cpp` |
 
 ## Verification
 
@@ -194,7 +195,7 @@ and have not been run.
   `ninfer_qwen3_5_mtp_adaptive_test`, `ninfer_token_logprobs_test`, `ninfer_e8_root_decode_test`
   and the serve option and schema tests cover the fork ports.
 - `ninfer_sparse_moe_test` walks the NVFP4 profile at T = 1, 2 and 12 on sm_8x and from T = 1 to
-  4097 on a native sm_120 build; `ninfer_gdn_replay_fold_test` folds records packed at a narrower
+  4097 on an sm_120a build; `ninfer_gdn_replay_fold_test` folds records packed at a narrower
   width than planned; `ninfer_mtp_round_test` prepares proposals wider than the verification; the
   batch cases of `ninfer_softmax_attention_test` compare the gated output byte for byte with the
   separate multiply.

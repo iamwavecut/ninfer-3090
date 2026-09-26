@@ -1108,6 +1108,16 @@ parents). The next merge from `neroued/master` will touch the same subsystem.
       artifact is not on this disk, and there is no `qwen3_8_27b` target directory — so which target
       serves it, and whether that target forces A16Only, is unverified.
 
+      **2026-09-26: gone on Blackwell, unchanged on sm_80/86/89.** The Qwen3.8 NVFP4 artifact is
+      affected: `models/qwen3_5/load/prepare.cpp` forced every stored permission to A16Only on the
+      compatibility path, so on an RTX PRO 6000 the default `120a` build failed in runtime planning
+      with the message above. Every `120a` build now compiles the NVFP4 W4A4 units
+      (`NINFER_SM120_NVFP4`) and keeps an NVFP4 weight's AllowA4 there; on the PRO 6000 the artifact
+      passes the prefix, scoring and DFlash2 real-model tests and answers under MTP, DFlash2 and
+      Vision, the 295 A4 cases the Op tests used to skip run and pass, and the other artifacts' greedy
+      answers are byte-identical to the build before. sm_80/86/89 have no FP4 tensor cores, so the
+      decision above still stands there.
+
 ### 1.1 `attn_input_proj` grossly wrong at `W8 DFlash2 A16 T=112 graph phase=1` — closed
 
 - [x] **A race in the test harness, not in any kernel.** Closed by #44, 2026-09-09.

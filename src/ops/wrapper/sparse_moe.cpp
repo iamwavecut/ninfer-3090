@@ -264,12 +264,12 @@ void sparse_moe(const Tensor& x, const SparseMoeWeights& weights, SparseMoeEpilo
     const bool use_small_t = detail::sparse_moe_uses_small_t(tokens);
     const bool use_prefill = detail::sparse_moe_uses_prefill(tokens, weights.routed_gate_up.qtype,
                                                              weights.routed_down.qtype);
-#if defined(NINFER_SM8X_COMPAT)
+#if defined(NINFER_SM8X_COMPAT) && !defined(NINFER_SM120_NVFP4)
     // The NVFP4 prefill route is W4A4 on the Blackwell FP4 tensor cores. Decode and the small-token
     // route are CUDA-core dot products and run here; a prefill-sized call has no route on sm_8x.
     if (use_prefill && nvfp4_profile(weights)) {
         throw std::invalid_argument(
-            "sparse_moe: NVFP4 expert banks prefill only on a native sm_120 build");
+            "sparse_moe: NVFP4 expert banks prefill only on an sm_120a build");
     }
 #endif
     nvtx::ScopedRange moe_range(use_prefill   ? nvtx::Name::SparseMoePrefill

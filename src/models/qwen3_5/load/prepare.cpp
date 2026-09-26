@@ -7,6 +7,25 @@
 #include <vector>
 
 namespace ninfer::models::qwen3_5::loading {
+#if defined(NINFER_SM8X_COMPAT)
+namespace {
+
+#    if defined(NINFER_SM120_NVFP4)
+constexpr bool kNvfp4A4Built = true;
+#    else
+constexpr bool kNvfp4A4Built = false;
+#    endif
+
+bool stored_as(const artifact::Reader& reader, const artifact::ParameterReference& reference,
+               QType format) {
+    for (const auto& part : reference.binding.parts) {
+        if (reader.geometry(part.object).format != format) { return false; }
+    }
+    return !reference.binding.parts.empty();
+}
+
+} // namespace
+#endif
 
 WeightUseId Bindings::use(WeightId id, std::string_view input) const {
     const auto& parameter = at(id);
@@ -46,8 +65,12 @@ WeightId Bindings::parameter(std::string name, artifact::Shape shape,
 #if defined(NINFER_SM8X_COMPAT)
         // sm_86/sm_89 have no FP8 or FP4 tensor cores. A stored permission for A8/A4 activations
         // is an upper bound, not a requirement, so FP8 and NVFP4 weights run their A16 routes,
-        // which dequantize the stored codes before the matmul.
-        result.policy = ops::LinearPolicy::A16Only;
+        // which dequantize the stored codes before the matmul. A 120a build on this path keeps the
+        // NVFP4 W4A4 units, and there an NVFP4 weight keeps its A4 permission.
+        if (!(kNvfp4A4Built && result.policy == ops::LinearPolicy::AllowA4 &&
+              stored_as(binder.reader(), pending.reference, QType::NVFP4))) {
+            result.policy = ops::LinearPolicy::A16Only;
+        }
 #endif
         for (const auto& [role, binding] : use.auxiliaries) {
             if (role == "hadamard_signs") {

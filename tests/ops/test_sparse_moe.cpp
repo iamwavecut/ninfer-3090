@@ -983,7 +983,7 @@ int main() {
     // NVFP4 walks both frontiers: its Small-T edge and first prefill T, where the activation stops
     // being represented, and then the prefill tile boundary and the internal slice. Its prefill
     // route is W4A4 on Blackwell tensor cores, so an sm_8x build walks decode and Small-T only.
-#if defined(NINFER_SM8X_COMPAT)
+#if defined(NINFER_SM8X_COMPAT) && !defined(NINFER_SM120_NVFP4)
     constexpr std::array<std::int32_t, 3> kNvfp4Tokens{{1, 2, 12}};
 #else
     constexpr std::array<std::int32_t, 7> kNvfp4Tokens{{1, 2, 12, 13, 64, 768, 4097}};

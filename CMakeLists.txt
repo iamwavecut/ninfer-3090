@@ -24,17 +24,24 @@ project(ninfer LANGUAGES C CXX CUDA)
 # would not otherwise see it. Defining it globally keeps a single consistent answer for every
 # target, including apps/ninfer-perplexity, whose upstream default KV profile is FP8.
 #
-# A 120a build gets the same path by default. Its FP8/NVFP4 tensor-core routes would be genuinely
+# A 120a build gets the same path by default. Its FP8 tensor-core routes would be genuinely
 # available there, but they are a separate, unqualified code path, while the compatibility one is
 # the tested route and is the only one that promotes T2G128 weights to the integer-activation
 # prefill GEMM. Set NINFER_SM120_NATIVE=ON to build the Blackwell translation units instead.
 option(NINFER_SM120_NATIVE
-       "On a 120a build, compile the Blackwell FP8/NVFP4 units instead of the mma.sync path" OFF)
+       "On a 120a build, compile the Blackwell FP8 units and native routes instead of the mma.sync path"
+       OFF)
 if(CMAKE_CUDA_ARCHITECTURES MATCHES "^(80|86|89)$" OR NOT NINFER_SM120_NATIVE)
   set(NINFER_COMPAT_PATH ON)
   add_compile_definitions(NINFER_SM8X_COMPAT=1)
 else()
   set(NINFER_COMPAT_PATH OFF)
+endif()
+# Every 120a build keeps the NVFP4 W4A4 units, the compatibility path included: an NVFP4 weight
+# has no route wider than 16 columns without them, so an NVFP4 artifact could not start. They are
+# selected only by NVFP4 weights, so every other format keeps the path chosen above.
+if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
+  add_compile_definitions(NINFER_SM120_NVFP4=1)
 endif()
 
 # --- Global settings ---------------------------------------------------------

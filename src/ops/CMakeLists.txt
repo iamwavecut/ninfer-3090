@@ -12,7 +12,7 @@ target_link_libraries(ninfer_ops PRIVATE CUDA::cublas)
 # self-contained kernels therefore use a non-RDC archive and host launchers.
 # The SM120 tensor-core qualifiers do not exist on sm_86/sm_89, so this fork does not create
 # the archive there; family manifests add to it only when the target exists.
-if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a" AND NOT NINFER_COMPAT_PATH)
+if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
   add_library(ninfer_nvfp4_non_rdc STATIC)
   ninfer_internal_includes(ninfer_nvfp4_non_rdc)
   ninfer_cuda_non_rdc_archive(ninfer_nvfp4_non_rdc)
@@ -43,12 +43,17 @@ if(NINFER_COMPAT_PATH)
   # NVFP4 W4A4 uses mma.sync...kind::mxf4nvf4.block_scale; FP8 A8 uses
   # mma.sync...kind::f8f6f4. Both qualifiers are Blackwell-only, and sm_80/86/89 have no FP8 or FP4
   # tensor-core path to fall back to, so the owning translation units cannot be compiled here.
-  # The A16 dequantizing routes for both formats are kept and remain fully functional.
-  list(FILTER ninfer_ops_sources EXCLUDE REGEX "nvfp4/.+_w4a4\\.cu$")
+  # The A16 dequantizing routes for both formats are kept and remain fully functional. A 120a build
+  # on this path keeps the NVFP4 units (NINFER_SM120_NVFP4) and drops only FP8 A8.
+  if(NOT CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
+    list(FILTER ninfer_ops_sources EXCLUDE REGEX "nvfp4/.+_w4a4\\.cu$")
+    target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/nvfp4_sm86_stubs.cpp")
+  endif()
   list(FILTER ninfer_ops_sources EXCLUDE REGEX "fp8/.+_a8\\.cu$")
   set_property(TARGET ninfer_ops PROPERTY SOURCES ${ninfer_ops_sources})
-  target_sources(ninfer_ops PRIVATE
-    "${CMAKE_CURRENT_LIST_DIR}/nvfp4_sm86_stubs.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/fp8_sm86_stubs.cpp")
+  target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/fp8_sm86_stubs.cpp")
   target_compile_definitions(ninfer_ops PUBLIC NINFER_SM8X_COMPAT=1)
+endif()
+if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
+  target_compile_definitions(ninfer_ops PUBLIC NINFER_SM120_NVFP4=1)
 endif()
