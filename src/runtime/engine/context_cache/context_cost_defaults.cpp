@@ -42,6 +42,30 @@ constexpr ContextPrefillCost kGroupwise35bA3bPrefillSm86{
 constexpr const char* kGroupwise35bA3bSignatureText   = "ec5569f8250032ddd23568d599e4abf7e369d7a84971b2de3bd7fedfb9714dd1";
 constexpr const char* kGroupwise35bA3bSignatureVision = "f4a7fddf7c517236401d5d7f085879d7735de10d49e19d125c496139f47f6533";
 
+// RTX PRO 6000 Blackwell Workstation Edition (600 W) fits, measured 2026-09-26 with
+// ninfer_context_cost_bench at --max-context 65536 on the default 120a build, Vision enabled.
+constexpr ContextPrefillCost kGroupwise27bPrefillRtxPro6000{
+    .chunk_ns              = 36'345'984,
+    .token_ns_q32          = 643'113'761'669'684,
+    .attention_pair_ns_q32 = 5'872'308'995,
+    .vision_item_ns        = 5'202'185,
+    .vision_patch_ns_q32   = 20'368'500'587'416,
+};
+constexpr ContextPrefillCost kGroupwise35bA3bPrefillRtxPro6000{
+    .chunk_ns              = 16'889'725,
+    .token_ns_q32          = 109'713'142'774'825,
+    .attention_pair_ns_q32 = 4'386'704'449,
+    .vision_item_ns        = 5'188'750,
+    .vision_patch_ns_q32   = 20'218'782'611'123,
+};
+constexpr ContextPrefillCost kNvfp4Fp8PrefillRtxPro6000{
+    .chunk_ns              = 12'680'294,
+    .token_ns_q32          = 296'072'649'706'517,
+    .attention_pair_ns_q32 = 9'550'099'381,
+    .vision_item_ns        = 5'186'626,
+    .vision_patch_ns_q32   = 20'366'821'546'842,
+};
+
 } // namespace
 
 const std::array<ContextTransferCost, 3>& generic_context_transfer_cost() {
@@ -129,6 +153,38 @@ const std::vector<ContextCostMachinePreset>& compiled_context_cost_defaults() {
                      kGroupwise27bPrefillSm86},
                     {kGroupwise35bA3bSignatureText, kGroupwise35bA3bPrefillSm86},
                     {kGroupwise35bA3bSignatureVision, kGroupwise35bA3bPrefillSm86},
+                },
+        },
+        ContextCostMachinePreset{
+            .hardware_class = "nvidia-rtx-pro-6000-blackwell-workstation-edition-sm120",
+            .transfer =
+                std::array{
+                    ContextTransferCost{
+                        .batch_ns = 3'277, .operation_ns = 1'441, .ns_per_byte_q32 = 82'421'673},
+                    ContextTransferCost{
+                        .batch_ns = 6'962, .operation_ns = 1'526, .ns_per_byte_q32 = 85'338'968},
+                    ContextTransferCost{
+                        .batch_ns = 2'535, .operation_ns = 2'037, .ns_per_byte_q32 = 1'557'550},
+                },
+            // The Qwen3.8 fit serves the groupwise-int 27B signatures as on the RTX 3090, and the
+            // NVFP4/FP8 pair is the one the RTX 5090 entry names. Each pair is Vision
+            // disabled/enabled.
+            .prefill =
+                {
+                    {"200f57efee7b0fe1172dfd4a06b1e6e0b2dbc36dfcd6a242fea35338bb5ff0d2",
+                     kGroupwise27bPrefillRtxPro6000},
+                    {"badf2271162e72c8c51a91da02cbb4343d4b7574d037a014ca6862ff2862638b",
+                     kGroupwise27bPrefillRtxPro6000},
+                    {"cf336425f495069a4a56f254679b3ebfb82a8ba86d5b3cca4d36b38bf422ec16",
+                     kGroupwise27bPrefillRtxPro6000},
+                    {"e490f4a150c8573657ca0242b4ab9a0922e6986d5e295a03114fcdc4263b7fcc",
+                     kGroupwise27bPrefillRtxPro6000},
+                    {kGroupwise35bA3bSignatureText, kGroupwise35bA3bPrefillRtxPro6000},
+                    {kGroupwise35bA3bSignatureVision, kGroupwise35bA3bPrefillRtxPro6000},
+                    {"e6eae48276e11c15c932cb90d258b51b81e144dc13fb461e7ffa202d2caa440a",
+                     kNvfp4Fp8PrefillRtxPro6000},
+                    {"953e22d9b9a6639c09f7389d49084b059dea07720bc0121dfd9c154002459915",
+                     kNvfp4Fp8PrefillRtxPro6000},
                 },
         },
     };

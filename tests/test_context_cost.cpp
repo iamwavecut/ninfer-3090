@@ -313,6 +313,18 @@ void test_resolution_and_atomic_upserts() {
                        ninfer::ContextCostPresetSource::CompiledDefault,
                "RTX 3090 compiled defaults did not resolve for a measured artifact signature");
 
+        const auto rtx_pro_6000 = ninfer::runtime::resolve_context_machine_cost({
+            .hardware_class = "nvidia-rtx-pro-6000-blackwell-workstation-edition-sm120",
+            .prefill_signature =
+                "953e22d9b9a6639c09f7389d49084b059dea07720bc0121dfd9c154002459915",
+        });
+        expect(rtx_pro_6000.summary.transfer_source ==
+                       ninfer::ContextCostPresetSource::CompiledDefault &&
+                   rtx_pro_6000.summary.prefill_source ==
+                       ninfer::ContextCostPresetSource::CompiledDefault &&
+                   rtx_pro_6000.model.prefill.token_ns_q32 == 296'072'649'706'517,
+               "RTX PRO 6000 compiled defaults did not resolve for the NVFP4/FP8 signature");
+
         const auto measured = ninfer::runtime::resolve_context_machine_cost({
             .hardware_class    = compiled_identity.hardware_class,
             .prefill_signature = "e6eae48276e11c15c932cb90d258b51b81e144dc13fb461e7ffa202d2caa440a",
