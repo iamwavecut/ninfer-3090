@@ -162,7 +162,7 @@ and have not been run.
 |---|---|---|
 | ops | device route profiles: per hardware class and SM count, the schedule each route key takes per width band, installed per CUDA device before any Op runs; `DeviceRouteForce` for calibration | `ops/common/device_route.{h,cpp}` |
 | calibration | `calibrate_device_routes` times every route family through the inference dispatch on synthetic weights and caches, L2 flushed per sample; a candidate wins only 3 % ahead, again in a second interleaved round, and with output within 5 % of the compiled route | `calibration/device_calibration.{h,cu}`, `apps/calibrate/main.cpp` (`ninfer-calibrate`) |
-| runtime | profiles come from the user's file, then the built-in table (`device_profiles.json`, embedded at configure time: RTX 3090, 4090, 5090), else a calibration at first start that is saved; `--device-profile auto\|off\|calibrate`, `--device-profile-path` | `runtime/engine/device_profile.{h,cpp}`, `device_profiles_builtin.cpp.in`, `model_instance.cpp`, `serve/serve_options.cpp` |
+| runtime | profiles come from the user's file, then the built-in table (`device_profiles.json`, embedded at configure time: RTX 3090, 4090, 5090, and the RTX PRO 6000 Blackwell Workstation, Max-Q and Server editions, each its own hardware class at 188 SMs), else a calibration at first start that is saved; `--device-profile auto\|off\|calibrate`, `--device-profile-path` | `runtime/engine/device_profile.{h,cpp}`, `device_profiles_builtin.cpp.in`, `model_instance.cpp`, `serve/serve_options.cpp` |
 | attention | INT8-family small-T tiers routed by profile: warps, CTAs per SM, key block, split QK across producer warps (`q`), the next tile's codes and scales staged in registers a whole iteration ahead (`e`), both (`qe`) | `ops/softmax_attention/dense/causal_cache/small_t_i8{.cuh,_launch.cuh}`, `small_t.cu` |
 | attention | FP16 accumulation of P·V per key tile (small-T and INT8 prompt kernels), by profile (`attn_pv_f16`) or `NINFER_SMALLT_PV_F16` / `NINFER_PROMPT_PV_F16` | `small_t_i8.cuh`, `prompt_i8.cuh`, `ops/common/mma.cuh` |
 | attention | the fast prompt kernel also serves `rk8v4` (packed int4 values decoded from byte-pair `ldmatrix.trans`) and the packed key codings (`rk4v4`, `rk4v4-e8`, `rk2v4-e8`, expanded into the stage's INT8 tile); on by profile (`attn_prompt_fast`), `NINFER_PROMPT_FAST`, or `--fast-prefill-kernel` | `prompt_i8_fast.cuh`, `prompt.cu` |
@@ -218,6 +218,16 @@ and have not been run.
 - sm_120a: on an RTX 5090 both the default compatibility build and the native build
   (`NINFER_SM120_NATIVE`) pass `ctest` (169 tests), and the native build converts and serves the
   RedHatAI Qwen3.6-35B-A3B NVFP4 checkpoint.
+- RTX PRO 6000 Blackwell (188 SMs), default `120a` build: the full `ctest` (171 tests; the NVFP4 A4
+  cases run, only the FP8 A8 ones skip); the real-model tests with the Qwen3.8 groupwise and NVFP4
+  artifacts and the 35B-A3B groupwise and NVFP4 artifacts; greedy answers of the Qwen3.8,
+  Ternary Bonsai 2, GSQ-RCO and 35B-A3B artifacts without speculation, under MTP and DFlash2 and
+  with Vision, byte-identical to the build before the NVFP4 change, while the Qwen3.8 NVFP4
+  artifact, which did not start before, answers in all four modes. The RedHatAI Qwen3.6-35B-A3B
+  NVFP4 checkpoint converts and serves on this build: quick-corpus perplexity 4.410 against 4.364
+  for the groupwise artifact, scored at 15,080 against 11,266 tok/s. Each edition (Workstation at
+  600 W, Max-Q at 300 W, Server at 600 W) was calibrated twice, and on the Workstation edition a
+  start with no profile file took the built-in profile and wrote none.
 
 ## Deployment
 

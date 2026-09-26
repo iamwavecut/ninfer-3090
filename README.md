@@ -71,7 +71,8 @@ otherwise; each number's setup and the full tables are in the
   [GGUF block formats](docs/gguf.md).
 - **Device route profiles for every GPU.** Which kernel schedule serves each operation and width
   is looked up in the card's measured profile before the compiled tables, which were tuned on one
-  card. Profiles measured on the RTX 3090, 4090 and 5090 are built in; any other GPU is calibrated
+  card. Profiles measured on the RTX 3090, 4090, 5090 and all three RTX PRO 6000 Blackwell editions
+  (Workstation, Max-Q, Server) are built in; any other GPU is calibrated
   once at first start (20 to 40 seconds) and the result is saved, and `ninfer-calibrate`
   re-measures on demand. On the RTX 3090 the profile makes the `rk4v4` verify attention at 262K
   3.2 times faster; on all three it turns on FP16 accumulation of P·V (15 to 17% less time in that

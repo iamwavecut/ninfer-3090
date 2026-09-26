@@ -16,8 +16,10 @@ operation runs; operations without an entry keep their compiled route.
 1. **Your profile file.** `$NINFER_DEVICE_PROFILES`, else `$XDG_CACHE_HOME/ninfer/device-profiles.json`,
    else `~/.cache/ninfer/device-profiles.json` (`%LOCALAPPDATA%\ninfer\device-profiles.json` on
    Windows). `--device-profile-path` names another file.
-2. **The built-in table.** Profiles measured on the RTX 3090, RTX 4090 and RTX 5090 ship inside the
-   binary (`src/runtime/engine/device_profiles.json`).
+2. **The built-in table.** Profiles measured on the RTX 3090, RTX 4090, RTX 5090 and the RTX PRO 6000
+   Blackwell ship inside the binary (`src/runtime/engine/device_profiles.json`). The PRO 6000's
+   Workstation (600 W), Max-Q (300 W) and Server editions report different names, so each has its
+   own entry.
 3. **Calibration at first start.** A GPU with neither is calibrated once when the engine starts,
    before the weights are loaded. This takes 20 to 40 seconds, and the result is written to the
    profile file for later starts.

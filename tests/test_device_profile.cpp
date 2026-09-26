@@ -1,4 +1,5 @@
 #include "ops/common/device_route.h"
+#include "runtime/engine/context_cache/context_cost.h"
 #include "runtime/engine/device_profile.h"
 #include "runtime/engine/device_profiles_builtin.h"
 
@@ -67,6 +68,32 @@ void test_compiled_table_parses() {
     }
 }
 
+// The cards that ship a measured profile, by the name and compute capability the driver reports, so
+// a change to the hardware-class slug cannot silently orphan their entries.
+void test_builtin_parts() {
+    struct Part {
+        const char* name;
+        int major;
+        int minor;
+        int multiprocessors;
+    };
+
+    const Part parts[] = {
+        {"NVIDIA GeForce RTX 3090", 8, 6, 82},
+        {"NVIDIA GeForce RTX 4090", 8, 9, 128},
+        {"NVIDIA GeForce RTX 5090", 12, 0, 170},
+        {"NVIDIA RTX PRO 6000 Blackwell Workstation Edition", 12, 0, 188},
+        {"NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition", 12, 0, 188},
+        {"NVIDIA RTX PRO 6000 Blackwell Server Edition", 12, 0, 188},
+    };
+    for (const Part& part : parts) {
+        const auto found = ninfer::runtime::find_device_route_profile(
+            ninfer::runtime::context_cost_hardware_class(part.name, part.major, part.minor),
+            part.multiprocessors, {});
+        expect(found.has_value() && !found->routes.empty(), part.name);
+    }
+}
+
 void test_file_lookup() {
     const std::filesystem::path path =
         std::filesystem::temp_directory_path() /
@@ -113,6 +140,7 @@ int main() {
     test_round_trip();
     test_rejects_other_documents();
     test_compiled_table_parses();
+    test_builtin_parts();
     test_file_lookup();
     test_bands_and_force();
     if (failures != 0) {
