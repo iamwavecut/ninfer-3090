@@ -1,8 +1,9 @@
 # NInfer-all
 
-One line of [NInfer](https://github.com/Neroued/ninfer) for the RTX 3090, RTX 4090 and RTX 5090,
-consolidated from the forks that carry it and extended with this repository's own work. The base is
-the `master` of [ashalliants/ninfer-3090](https://github.com/ashalliants/ninfer-3090): v0.11.0 and
+One line of [NInfer](https://github.com/Neroued/ninfer) for the RTX 3090, RTX 4090, RTX 5090 and RTX
+PRO 6000 Blackwell, consolidated from the forks that carry it and extended with this repository's
+own work. The base is the `master` of
+[ashalliants/ninfer-3090](https://github.com/ashalliants/ninfer-3090): v0.11.0 and
 the multi-GPU pipeline stages, most of both written by [Warlax](https://github.com/WarlaxZ), on the
 line [Don-Chad/ninfer-3090](https://github.com/Don-Chad/ninfer-3090) started from Neroued's NInfer.
 On top of it come patches from [TertiumOrganum1/ninfer-3090](https://github.com/TertiumOrganum1/ninfer-3090),
@@ -30,16 +31,19 @@ Measured in September 2026 on one card each, greedy, one request at a time unles
 otherwise; each number's setup and the full tables are in the
 [reference measurements](docs/performance/reference-2026-09.md).
 
-| | RTX 3090 | RTX 4090 | RTX 5090 |
-|---|---:|---:|---:|
-| **Ternary Bonsai 2 27B**, short chat (DFlash2, 7 drafts) | 202 tok/s | 256 tok/s | 397 tok/s |
-| decode after a 261K-token document (fastest drafter) | 90 tok/s | 123 tok/s | 218 tok/s |
-| time to first token for a 261K-token prompt | 215 s | 102 s | 82 s |
-| largest context, filled and all three needles found | 970,752 | 958,464 | 978,944 |
-| eight requests at once (MTP, 3 drafts), total | 551 tok/s | 824 tok/s | 1,063 tok/s |
-| **Qwen3.8-27B**, short chat (DFlash2, 7 drafts) | 118 tok/s | 149 tok/s | 236 tok/s |
-| largest context, filled and all three needles found | 417,792 | 405,504 | 872,448 |
-| eight requests at once (MTP, 3 drafts), total | 329 tok/s | 442 tok/s | 690 tok/s |
+| | RTX 3090 | RTX 4090 | RTX 5090 | RTX PRO 6000 |
+|---|---:|---:|---:|---:|
+| **Ternary Bonsai 2 27B**, short chat (DFlash2, 7 drafts) | 202 tok/s | 256 tok/s | 397 tok/s | 381 tok/s |
+| decode after a 261K-token document (fastest drafter) | 90 tok/s | 123 tok/s | 218 tok/s | 218 tok/s |
+| time to first token for a 261K-token prompt | 215 s | 102 s | 82 s | 78 s |
+| largest context, filled and all three needles found | 970,752 | 958,464 | 978,944 | 1,048,576\* |
+| eight requests at once (MTP, 3 drafts), total | 551 tok/s | 824 tok/s | 1,063 tok/s | 1,155 tok/s |
+| **Qwen3.8-27B**, short chat (DFlash2, 7 drafts) | 118 tok/s | 149 tok/s | 236 tok/s | 237 tok/s |
+| largest context, filled and all three needles found | 417,792 | 405,504 | 872,448 | 1,048,576\* |
+| eight requests at once (MTP, 3 drafts), total | 329 tok/s | 442 tok/s | 690 tok/s | 739 tok/s |
+
+\* The engine's ceiling, which the RTX PRO 6000 (96 GB) starts with every KV storage and drafter;
+filled to it, both models find two of the three needles.
 
 - **Against the previous `master` on the same card**, a 261K-token Bonsai prompt takes 215 s instead
   of 315 s on the RTX 3090, 102 s instead of 138 s on the RTX 4090 and 82 s instead of 115 s on the
@@ -53,7 +57,10 @@ otherwise; each number's setup and the full tables are in the
   documents the best count lies between three and seven; MTP runs up to fifteen drafts now but is
   fastest at three to five.
 - **Past the native window.** Filled to about 880K tokens, Bonsai 2 returned all three planted codes
-  on every card; at 1,048,576 tokens, which only the RTX 5090 holds, it misses the one at 943K.
+  on every card; at 1,048,576 tokens, which only the RTX 5090 and the RTX PRO 6000 hold, it misses the
+  one at 943K.
+- **RTX PRO 6000.** Its 96 GB start every configuration at the engine's 1,048,576-token ceiling with
+  at least 50 GiB to spare. Against the RTX 5090 it prefills 4 to 6% faster and decodes 2 to 3% slower.
 
 ## What this line adds
 
@@ -356,7 +363,8 @@ cmake --build build --target ninfer-serve ninfer-calibrate
 ```
 
 `CMAKE_CUDA_ARCHITECTURES` is `86` for the RTX 30 series, `89` for the RTX 40 series and `120a`
-for the RTX 50 series (on the `mma.sync` compatibility path, which the ternary route needs). The
+for the RTX 50 series and the RTX PRO 6000 Blackwell (on the `mma.sync` compatibility path, which the
+ternary route needs). The
 opt-in build options are listed in the [Linux build guide](docs/rtx-3090-linux.md#build-options).
 Windows builds, release packages, tests and benchmarks work as in the
 [NInfer-3090 README](https://github.com/ashalliants/ninfer-3090#readme).

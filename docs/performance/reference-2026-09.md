@@ -1,9 +1,10 @@
 # Reference measurements, September 2026
 
-Ternary Bonsai 2 27B and Qwen3.8-27B on one RTX 3090, RTX 4090 and RTX 5090 each, at the models' full
-262,144-token window where the card holds it, with this line's defaults: the device route profile
-of each card (built in), `--gdn-state-fp16`, text only, one request at a time unless a section says
-otherwise. The first section compares this line with the previous `master` on the same hosts.
+Ternary Bonsai 2 27B and Qwen3.8-27B on one RTX 3090, RTX 4090, RTX 5090 and RTX PRO 6000 each, at
+the models' full 262,144-token window where the card holds it, with this line's defaults: the device
+route profile of each card (built in), `--gdn-state-fp16`, text only, one request at a time unless a
+section says otherwise. The first section compares this line with the previous `master` on the same
+hosts; the RTX PRO 6000 was measured on this line only.
 
 <!-- TABLES -->
 
@@ -332,23 +333,123 @@ One request. Each KV coding runs at the largest window DFlash2 fits beside it on
 | `rk4v4-e8` | none | 261,016 | 3/3 | yes | 300.9 |
 | `rk8v4` | none | 175,006 | 3/3 | yes | 170.6 |
 
+## RTX PRO 6000
+
+### Ternary Bonsai 2 27B
+
+Window 262,144 tokens, one request.
+
+**Decode, tokens/s** (short chat = five 512-token answers; at depth, a ~400-word answer after a document of that length):
+
+| KV | speculation | VRAM | short chat | 1,024 | 8,192 | 32,768 | 65,536 | 131,072 | 196,608 | 261,120 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `rk4v4` | none | 12.6 GiB | 167.2 | 166.6 | 161.3 | 155.1 | 146.4 | 131.3 | 119.5 | 109.8 |
+| `rk4v4` | DFlash2, 5 drafts | 14.0 GiB | 360.9 | 401.3 | 317.4 | 284.2 | 242.7 | 197.9 | 179.4 | 193.0 |
+| `rk4v4` | MTP, 3 drafts | 13.3 GiB | 330.4 | 266.0 | 306.9 | 229.8 | 226.2 | 208.6 | 198.3 | 217.9 |
+| `rk4v4-e8` | none | 12.6 GiB | 167.3 | 166.9 | 161.8 | 155.2 | 146.6 | 131.3 | 119.7 | 110.0 |
+| `rk4v4-e8` | DFlash2, 5 drafts | 14.0 GiB | 367.4 | 285.1 | 307.0 | 319.9 | 222.8 | 203.7 | 180.8 | 189.7 |
+| `rk8v4` | none | 14.6 GiB | 167.5 | 166.8 | 162.2 | 151.5 | 139.8 | 121.2 | 107.3 | 96.4 |
+| `rk8v4` | DFlash2, 5 drafts | 16.0 GiB | 361.7 | 304.6 | 318.1 | 309.6 | 250.7 | 204.6 | 233.5 | 200.9 |
+| `rk8v4` | MTP, 3 drafts | 15.4 GiB | 314.7 | 313.0 | 293.3 | 258.1 | 229.7 | 191.4 | 192.0 | 210.5 |
+
+**Time to first token, s** (cold prompt of that length):
+
+| KV | speculation | 1,024 | 8,192 | 32,768 | 65,536 | 131,072 | 196,608 | 261,120 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `rk4v4` | none | 0.16 | 1.11 | 4.9 | 11.4 | 28.9 | 52.7 | 82.0 |
+| `rk4v4` | DFlash2, 5 drafts | 0.17 | 1.12 | 4.9 | 11.5 | 29.2 | 53.1 | 82.5 |
+| `rk4v4` | MTP, 3 drafts | 0.17 | 1.11 | 4.9 | 11.4 | 29.0 | 52.9 | 82.1 |
+| `rk4v4-e8` | none | 0.16 | 1.10 | 4.9 | 11.3 | 28.7 | 52.1 | 81.1 |
+| `rk4v4-e8` | DFlash2, 5 drafts | 0.17 | 1.12 | 4.9 | 11.4 | 28.9 | 52.5 | 81.6 |
+| `rk8v4` | none | 0.16 | 1.07 | 4.7 | 10.8 | 27.4 | 50.1 | 78.3 |
+| `rk8v4` | DFlash2, 5 drafts | 0.17 | 1.12 | 4.9 | 11.2 | 28.3 | 51.2 | 79.0 |
+| `rk8v4` | MTP, 3 drafts | 0.16 | 1.11 | 4.8 | 11.1 | 28.0 | 50.8 | 78.5 |
+
+**Draft acceptance** (accepted / drafted; tokens per verify round in brackets):
+
+| KV | speculation | short chat | 1,024 | 8,192 | 32,768 | 65,536 | 131,072 | 196,608 | 261,120 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `rk4v4` | DFlash2, 5 drafts | 0.39 (2.91) | 0.46 (3.26) | 0.33 (2.62) | 0.31 (2.54) | 0.26 (2.31) | 0.23 (2.14) | 0.24 (2.17) | 0.32 (2.57) |
+| `rk4v4` | MTP, 3 drafts | 0.54 (2.61) | 0.38 (2.13) | 0.52 (2.60) | 0.33 (1.99) | 0.36 (2.06) | 0.38 (2.14) | 0.41 (2.25) | 0.56 (2.67) |
+| `rk4v4-e8` | DFlash2, 5 drafts | 0.40 (2.96) | 0.26 (2.31) | 0.31 (2.53) | 0.37 (2.84) | 0.23 (2.12) | 0.24 (2.19) | 0.24 (2.18) | 0.30 (2.51) |
+| `rk8v4` | DFlash2, 5 drafts | 0.39 (2.91) | 0.30 (2.47) | 0.33 (2.65) | 0.35 (2.75) | 0.28 (2.38) | 0.24 (2.19) | 0.36 (2.81) | 0.33 (2.63) |
+| `rk8v4` | MTP, 3 drafts | 0.50 (2.48) | 0.50 (2.48) | 0.48 (2.46) | 0.42 (2.24) | 0.39 (2.15) | 0.35 (2.05) | 0.44 (2.30) | 0.60 (2.78) |
+
+**Needles** (three codes at 33, 66 and 90% of a document):
+
+| KV | speculation | document | found | order | TTFT s |
+|---|---|---:|---:|---|---:|
+| `rk4v4` | none | 261,020 | 3/3 | yes | 82.0 |
+| `rk4v4-e8` | none | 261,016 | 3/3 | yes | 81.0 |
+| `rk8v4` | none | 261,019 | 3/3 | yes | 78.4 |
+
+### Qwen3.8-27B
+
+Window 262,144 tokens, one request.
+
+**Decode, tokens/s** (short chat = five 512-token answers; at depth, a ~400-word answer after a document of that length):
+
+| KV | speculation | VRAM | short chat | 1,024 | 8,192 | 32,768 | 65,536 | 131,072 | 196,608 | 261,120 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `rk4v4` | none | 21.8 GiB | 89.6 | 89.5 | 88.0 | 85.9 | 83.2 | 78.0 | 73.7 | 69.9 |
+| `rk4v4` | DFlash2, 5 drafts | 24.0 GiB | 219.9 | 189.4 | 179.6 | 183.7 | 154.0 | 142.4 | 166.4 | 116.1 |
+| `rk4v4` | MTP, 3 drafts | 22.5 GiB | 186.4 | 164.5 | 169.6 | 149.0 | 161.0 | 143.4 | 142.9 | 128.7 |
+| `rk4v4-e8` | none | 21.8 GiB | 89.7 | 89.5 | 88.0 | 85.9 | 83.2 | 78.1 | 73.8 | 70.0 |
+| `rk4v4-e8` | DFlash2, 5 drafts | 24.0 GiB | 222.7 | 184.6 | 171.7 | 214.9 | 148.5 | 142.2 | 150.3 | 121.6 |
+| `rk8v4` | none | 23.8 GiB | 89.6 | 89.4 | 88.0 | 84.9 | 81.1 | 74.5 | 69.1 | 64.4 |
+| `rk8v4` | DFlash2, 5 drafts | 26.0 GiB | 219.1 | 195.9 | 186.0 | 217.2 | 156.9 | 160.2 | 164.5 | 120.9 |
+| `rk8v4` | MTP, 3 drafts | 24.6 GiB | 187.5 | 154.3 | 172.4 | 176.4 | 164.2 | 135.8 | 129.6 | 120.4 |
+
+**Time to first token, s** (cold prompt of that length):
+
+| KV | speculation | 1,024 | 8,192 | 32,768 | 65,536 | 131,072 | 196,608 | 261,120 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `rk4v4` | none | 0.30 | 1.87 | 7.9 | 17.2 | 40.5 | 70.0 | 104.9 |
+| `rk4v4` | DFlash2, 5 drafts | 0.31 | 1.88 | 7.9 | 17.3 | 40.9 | 70.5 | 105.6 |
+| `rk4v4` | MTP, 3 drafts | 0.31 | 1.87 | 7.8 | 17.2 | 40.6 | 70.1 | 105.0 |
+| `rk4v4-e8` | none | 0.30 | 1.87 | 7.8 | 17.1 | 40.3 | 69.4 | 104.0 |
+| `rk4v4-e8` | DFlash2, 5 drafts | 0.31 | 1.88 | 7.9 | 17.2 | 40.6 | 69.9 | 104.5 |
+| `rk8v4` | none | 0.30 | 1.86 | 7.7 | 16.9 | 39.4 | 67.7 | 100.8 |
+| `rk8v4` | DFlash2, 5 drafts | 0.31 | 1.87 | 7.8 | 17.0 | 39.7 | 68.3 | 101.7 |
+| `rk8v4` | MTP, 3 drafts | 0.30 | 1.86 | 7.8 | 16.9 | 39.6 | 68.1 | 101.5 |
+
+**Draft acceptance** (accepted / drafted; tokens per verify round in brackets):
+
+| KV | speculation | short chat | 1,024 | 8,192 | 32,768 | 65,536 | 131,072 | 196,608 | 261,120 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `rk4v4` | DFlash2, 5 drafts | 0.44 (3.18) | 0.36 (2.75) | 0.33 (2.66) | 0.37 (2.85) | 0.30 (2.47) | 0.30 (2.48) | 0.42 (3.11) | 0.26 (2.31) |
+| `rk4v4` | MTP, 3 drafts | 0.60 (2.78) | 0.49 (2.46) | 0.54 (2.62) | 0.45 (2.34) | 0.54 (2.62) | 0.50 (2.49) | 0.54 (2.61) | 0.50 (2.48) |
+| `rk4v4-e8` | DFlash2, 5 drafts | 0.45 (3.21) | 0.34 (2.70) | 0.31 (2.54) | 0.47 (3.33) | 0.28 (2.38) | 0.29 (2.47) | 0.36 (2.78) | 0.28 (2.40) |
+| `rk8v4` | DFlash2, 5 drafts | 0.44 (3.16) | 0.37 (2.84) | 0.35 (2.77) | 0.47 (3.37) | 0.30 (2.51) | 0.35 (2.75) | 0.41 (3.04) | 0.28 (2.38) |
+| `rk8v4` | MTP, 3 drafts | 0.60 (2.80) | 0.44 (2.31) | 0.54 (2.62) | 0.60 (2.85) | 0.57 (2.74) | 0.48 (2.45) | 0.49 (2.46) | 0.48 (2.44) |
+
+**Needles** (three codes at 33, 66 and 90% of a document):
+
+| KV | speculation | document | found | order | TTFT s |
+|---|---|---:|---:|---|---:|
+| `rk4v4` | none | 261,021 | 3/3 | yes | 104.8 |
+| `rk4v4-e8` | none | 261,018 | 3/3 | yes | 104.0 |
+| `rk8v4` | none | 261,021 | 3/3 | yes | 100.9 |
+
 ## Largest context per card
 
-The largest `--max-context` (= `--kv-capacity`, one request, `--rope-yarn` past 262,144) the server starts with, found by bisection in 4,096-token steps. Each cell gives it without speculation / with MTP (3 drafts) / with DFlash2 (5 drafts); 1,048,576 is the engine's ceiling.
+The largest `--max-context` (= `--kv-capacity`, one request, `--rope-yarn` past 262,144) the server starts with, found by bisection in 4,096-token steps. Each cell gives it without speculation / with MTP (3 drafts) / with DFlash2 (5 drafts); 1,048,576 is the engine's ceiling. The RTX PRO 6000 starts every configuration at the ceiling with at least 50 GiB free.
 
-| model | KV | RTX 5090 | RTX 4090 | RTX 3090 |
-|---|---|---:|---:|---:|
-| Ternary Bonsai 2 27B | `rk8v4` | 978,944 / 901,120 / 901,120 | 659,456 / 602,112 / 581,632 | 663,552 / 606,208 / 585,728 |
-| Ternary Bonsai 2 27B | `rk4v4` | 1,048,576 / 1,048,576 / 1,048,576 | 958,464 / 876,544 / 831,488 | 970,752 / 884,736 / 839,680 |
-| Ternary Bonsai 2 27B | `rk4v4-e8` | 1,048,576 / - / - | 958,464 / - / - | 970,752 / - / - |
-| Qwen3.8-27B | `rk8v4` | 598,016 / 544,768 / 491,520 | 278,528 / 241,664 / 167,936 | 286,720 / 249,856 / 176,128 |
-| Qwen3.8-27B | `rk4v4` | 872,448 / 794,624 / 716,800 | 405,504 / 356,352 / 245,760 | 417,792 / 364,544 / 258,048 |
-| Qwen3.8-27B | `rk4v4-e8` | 872,448 / - / - | 405,504 / - / - | 417,792 / - / - |
+| model | KV | RTX PRO 6000 | RTX 5090 | RTX 4090 | RTX 3090 |
+|---|---|---:|---:|---:|---:|
+| Ternary Bonsai 2 27B | `rk8v4` | 1,048,576 / 1,048,576 / 1,048,576 | 978,944 / 901,120 / 901,120 | 659,456 / 602,112 / 581,632 | 663,552 / 606,208 / 585,728 |
+| Ternary Bonsai 2 27B | `rk4v4` | 1,048,576 / 1,048,576 / 1,048,576 | 1,048,576 / 1,048,576 / 1,048,576 | 958,464 / 876,544 / 831,488 | 970,752 / 884,736 / 839,680 |
+| Ternary Bonsai 2 27B | `rk4v4-e8` | 1,048,576 / - / - | 1,048,576 / - / - | 958,464 / - / - | 970,752 / - / - |
+| Qwen3.8-27B | `rk8v4` | 1,048,576 / 1,048,576 / 1,048,576 | 598,016 / 544,768 / 491,520 | 278,528 / 241,664 / 167,936 | 286,720 / 249,856 / 176,128 |
+| Qwen3.8-27B | `rk4v4` | 1,048,576 / 1,048,576 / 1,048,576 | 872,448 / 794,624 / 716,800 | 405,504 / 356,352 / 245,760 | 417,792 / 364,544 / 258,048 |
+| Qwen3.8-27B | `rk4v4-e8` | 1,048,576 / - / - | 872,448 / - / - | 405,504 / - / - | 417,792 / - / - |
 
 Filled to that length (one request: a document with three codes at 33, 66 and 90%, asked back in order), without speculation:
 
 | card | model | KV | tokens | needles | TTFT | decode after it |
 |---|---|---|---:|---:|---:|---:|
+| RTX PRO 6000 | Ternary Bonsai 2 27B | `rk4v4` | 1,048,576 | 2/3 | 910 s | 55.3 tok/s |
+| RTX PRO 6000 | Qwen3.8-27B | `rk4v4` | 1,048,576 | 2/3 | 999 s | 42.9 tok/s |
 | RTX 5090 | Ternary Bonsai 2 27B | `rk4v4` | 1,048,576 | 2/3 | 937 s | 56.2 tok/s |
 | RTX 5090 | Ternary Bonsai 2 27B | `rk8v4` | 978,944 | 3/3 | 772 s | 46.9 tok/s |
 | RTX 5090 | Qwen3.8-27B | `rk4v4` | 872,448 | 3/3 | 755 s | 47.6 tok/s |
@@ -362,7 +463,7 @@ Filled to that length (one request: a document with three codes at 33, 66 and 90
 | RTX 3090 | Qwen3.8-27B | `rk4v4` | 417,792 | 3/3 | 644 s | 23.8 tok/s |
 | RTX 3090 | Qwen3.8-27B | `rk8v4` | 286,720 | 3/3 | 353 s | 31.0 tok/s |
 
-At 1,048,576 tokens the RTX 5090 finds 2 of the three codes with `--rope-yarn` and 2 with plain RoPE (TTFT 937 and 939 s, decode 56.2 tok/s), missing the same code, the one at 90%, both times. The largest window that returned all three on that card is 978,944 tokens with `rk8v4`, whose last code sits near 881K.
+At 1,048,576 tokens the RTX 5090 finds 2 of the three codes with `--rope-yarn` and 2 with plain RoPE (TTFT 937 and 939 s, decode 56.2 tok/s), missing the same code, the one at 90%, both times. The largest window that returned all three on that card is 978,944 tokens with `rk8v4`, whose last code sits near 881K. On the RTX PRO 6000 both models miss that code at 1,048,576 tokens too.
 
 ## Draft length
 
@@ -550,6 +651,12 @@ Total generated tokens per second of wall time when N requests arrive together: 
 
 | card | model | speculation | 1 at once | 2 at once | 4 at once | 8 at once |
 |---|---|---|---:|---:|---:|---:|
+| RTX PRO 6000 | Ternary Bonsai 2 27B | none | 165.5 | 321.4 | 599.1 | 1,043.5 |
+| RTX PRO 6000 | Ternary Bonsai 2 27B | MTP, 3 drafts | 274.4 | 516.0 | 805.0 | 1,155.3 |
+| RTX PRO 6000 | Ternary Bonsai 2 27B | DFlash2, 5 drafts | 270.6 | 523.9 | 735.5 | 890.4 |
+| RTX PRO 6000 | Qwen3.8-27B | none | 88.8 | 172.6 | 327.9 | 569.8 |
+| RTX PRO 6000 | Qwen3.8-27B | MTP, 3 drafts | 154.4 | 300.9 | 515.8 | 739.3 |
+| RTX PRO 6000 | Qwen3.8-27B | DFlash2, 5 drafts | 176.1 | 319.4 | 473.7 | 534.6 |
 | RTX 5090 | Ternary Bonsai 2 27B | none | 169.8 | 327.4 | 608.6 | 1,053.3 |
 | RTX 5090 | Ternary Bonsai 2 27B | MTP, 3 drafts | 263.3 | 511.3 | 771.1 | 1,063.0 |
 | RTX 5090 | Ternary Bonsai 2 27B | DFlash2, 5 drafts | 278.1 | 511.7 | 631.9 | 799.1 |
@@ -573,14 +680,14 @@ Total generated tokens per second of wall time when N requests arrive together: 
 
 Routes each card's calibration moved off the compiled tables, with the largest speedup of the operation (its time on the compiled route over its time on the chosen one, not end to end):
 
-| route | RTX 3090 | RTX 4090 | RTX 5090 |
-|---|---|---|---|
-| `rk8v4` decode/verify attention | query widths 2-5: up to 1.16× | query widths 2-8: up to 1.16× | query widths 3-8: up to 1.08× |
-| `rk4v4` decode/verify attention | query widths 1-5: up to 3.20× | query widths 1, 3-7: up to 1.46× | query widths 1-8: up to 1.13× |
-| fast prompt kernel | 1.41× | 1.43× | 1.24× |
-| FP16 PV accumulation | 1.17× | 1.20× | 1.19× |
-| ternary small-T projections | 12 widths, up to 1.09× | 15 widths, up to 1.27× | 34 widths, up to 1.38× |
-| groupwise Q4/Q5 projections | - | 13 widths, up to 1.26× | 9 widths, up to 1.14× |
+| route | RTX 3090 | RTX 4090 | RTX 5090 | RTX PRO 6000 | PRO 6000 Max-Q | PRO 6000 Server |
+|---|---|---|---|---|---|---|
+| `rk8v4` decode/verify attention | query widths 2-5: up to 1.16× | query widths 2-8: up to 1.16× | query widths 3-8: up to 1.08× | query widths 3-4, 6-8: up to 1.08× | - | query widths 6-8: up to 1.06× |
+| `rk4v4` decode/verify attention | query widths 1-5: up to 3.20× | query widths 1, 3-7: up to 1.46× | query widths 1-8: up to 1.13× | query widths 1-8: up to 1.19× | query widths 1, 3-8: up to 1.11× | query widths 1, 3-8: up to 1.16× |
+| fast prompt kernel | 1.41× | 1.43× | 1.24× | 1.20× | 1.19× | 1.23× |
+| FP16 PV accumulation | 1.17× | 1.20× | 1.19× | - | - | - |
+| ternary small-T projections | 12 widths, up to 1.09× | 15 widths, up to 1.27× | 34 widths, up to 1.38× | 31 widths, up to 1.28× | 33 widths, up to 1.33× | 33 widths, up to 1.16× |
+| groupwise Q4/Q5 projections | - | 13 widths, up to 1.26× | 9 widths, up to 1.14× | 11 widths, up to 1.23× | 12 widths, up to 1.24× | 7 widths, up to 1.25× |
 
 ## How these were measured
 
@@ -588,8 +695,10 @@ Routes each card's calibration moved off the compiled tables, with the largest s
 for the Ternary Bonsai 2 rows, their comparison with `master` and several requests at once; two
 other boards at 370 W for the Qwen3.8 rows and their comparison with `master`, the draft sweeps,
 the largest context and the fills. RTX 4090: 450 W (the largest-context bisection ran on a second
-board capped at 400 W; it does not depend on power). RTX 5090: 575 W, on two hosts. The server runs
-pinned to the CPUs of the GPU's NUMA node.
+board capped at 400 W; it does not depend on power). RTX 5090: 575 W, on two hosts. RTX PRO 6000:
+the Workstation Edition at 600 W; the Max-Q (300 W) and Server (600 W) editions were calibrated for
+their built-in profiles and not measured here. The server runs pinned to the CPUs of the GPU's NUMA
+node.
 
 **Software.** This repository at the commit that ships the built-in profiles, built for the card
 (`sm_86`, `sm_89`, `sm_120a` on the `mma.sync` path), CUDA 13.1. Artifacts:
