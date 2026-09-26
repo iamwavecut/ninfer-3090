@@ -172,7 +172,7 @@ and have not been run.
 | graphs | MTP draft windows past eight verify columns build one CUDA Graph executable per profile (Mykhailo Dementii's topology classes, #221, cover up to eight) | `models/qwen3_5/program/planning/graph_profiles.cpp` |
 | graphs | MTP and one-token decode profiles share an executable only when every attention call they capture takes the same route, as `causal_softmax_attention_route_family` reports for the model's geometry and KV storage (BF16 takes the prompt kernel up to 128 keys); MTP class ids get a per-width stride of 64 | `models/qwen3_5/program/planning/graph_profiles.cpp`, `graphs.cpp`, `startup.cpp`, `ops/.../causal_softmax_attention.cpp` |
 | build | the INT8 small-T launch compiles in 28 units (width, geometry, input) | `ops/softmax_attention/sources.cmake` |
-| build | every `120a` build compiles the NVFP4 W4A4 units (`NINFER_SM120_NVFP4`), the default compatibility path included, and an NVFP4 weight keeps its stored A4 permission there; before, an NVFP4 artifact failed at runtime planning on that path because the A16 SwiGLU route stops at 16 columns. FP8 A8 still needs `NINFER_SM120_NATIVE` | `CMakeLists.txt`, `ops/CMakeLists.txt`, `models/qwen3_5/load/prepare.cpp`, `ops/linear/nvfp4/nvfp4_launch.cuh`, `ops/weight_input.cpp`, `ops/wrapper/sparse_moe.cpp` |
+| build | every `120a` build compiles the FP8 A8 and NVFP4 W4A4 units (`NINFER_SM120_FP8`, `NINFER_SM120_NVFP4`), the default compatibility path included, and FP8 and NVFP4 weights keep their stored A8 and A4 permissions there; before, an NVFP4 artifact failed at runtime planning on that path because the A16 SwiGLU route stops at 16 columns, and FP8 weights prefilled through their dequantizing A16 route | `CMakeLists.txt`, `ops/CMakeLists.txt`, `models/qwen3_5/load/prepare.cpp`, `ops/linear/fp8/fp8_launch.cuh`, `ops/linear/nvfp4/nvfp4_launch.cuh`, `ops/weight_input.cpp`, `ops/wrapper/sparse_moe.cpp` |
 
 ## Verification
 
@@ -218,12 +218,14 @@ and have not been run.
 - sm_120a: on an RTX 5090 both the default compatibility build and the native build
   (`NINFER_SM120_NATIVE`) pass `ctest` (169 tests), and the native build converts and serves the
   RedHatAI Qwen3.6-35B-A3B NVFP4 checkpoint.
-- RTX PRO 6000 Blackwell (188 SMs), default `120a` build: the full `ctest` (171 tests; the NVFP4 A4
-  cases run, only the FP8 A8 ones skip); the real-model tests with the Qwen3.8 groupwise and NVFP4
-  artifacts and the 35B-A3B groupwise and NVFP4 artifacts; greedy answers of the Qwen3.8,
-  Ternary Bonsai 2, GSQ-RCO and 35B-A3B artifacts without speculation, under MTP and DFlash2 and
-  with Vision, byte-identical to the build before the NVFP4 change, while the Qwen3.8 NVFP4
-  artifact, which did not start before, answers in all four modes. The RedHatAI Qwen3.6-35B-A3B
+- RTX PRO 6000 Blackwell (188 SMs), default `120a` build: the full `ctest` (171 tests; the FP8 A8
+  and NVFP4 A4 cases run, and only two cases that need an artifact path skip); the real-model tests
+  with the Qwen3.8 groupwise and NVFP4/FP8 artifacts and the 35B-A3B groupwise and NVFP4
+  artifacts; greedy answers of the Qwen3.8, Ternary Bonsai 2, GSQ-RCO and 35B-A3B artifacts
+  without speculation, under MTP and DFlash2 and with Vision, byte-identical to the build before
+  the FP8 and NVFP4 changes, while the Qwen3.8 NVFP4/FP8 artifact, which did not start before,
+  answers in all four modes and prefills 4,096 tokens at 11,822 tok/s, within 1.4% of a native
+  build of the same commit. The RedHatAI Qwen3.6-35B-A3B
   NVFP4 checkpoint converts and serves on this build: quick-corpus perplexity 4.410 against 4.364
   for the groupwise artifact, scored at 15,080 against 11,266 tok/s. Each edition (Workstation at
   600 W, Max-Q at 300 W, Server at 600 W) was calibrated twice, and on the Workstation edition a

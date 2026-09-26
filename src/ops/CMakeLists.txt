@@ -39,21 +39,22 @@ include("${CMAKE_CURRENT_LIST_DIR}/softmax_attention/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/sparse_moe/sources.cmake")
 
 if(NINFER_COMPAT_PATH)
-  get_target_property(ninfer_ops_sources ninfer_ops SOURCES)
   # NVFP4 W4A4 uses mma.sync...kind::mxf4nvf4.block_scale; FP8 A8 uses
   # mma.sync...kind::f8f6f4. Both qualifiers are Blackwell-only, and sm_80/86/89 have no FP8 or FP4
-  # tensor-core path to fall back to, so the owning translation units cannot be compiled here.
+  # tensor-core path to fall back to, so the owning translation units cannot be compiled there.
   # The A16 dequantizing routes for both formats are kept and remain fully functional. A 120a build
-  # on this path keeps the NVFP4 units (NINFER_SM120_NVFP4) and drops only FP8 A8.
+  # on this path keeps both (NINFER_SM120_FP8, NINFER_SM120_NVFP4).
   if(NOT CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
+    get_target_property(ninfer_ops_sources ninfer_ops SOURCES)
     list(FILTER ninfer_ops_sources EXCLUDE REGEX "nvfp4/.+_w4a4\\.cu$")
-    target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/nvfp4_sm86_stubs.cpp")
+    list(FILTER ninfer_ops_sources EXCLUDE REGEX "fp8/.+_a8\\.cu$")
+    set_property(TARGET ninfer_ops PROPERTY SOURCES ${ninfer_ops_sources})
+    target_sources(ninfer_ops PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/nvfp4_sm86_stubs.cpp"
+      "${CMAKE_CURRENT_LIST_DIR}/fp8_sm86_stubs.cpp")
   endif()
-  list(FILTER ninfer_ops_sources EXCLUDE REGEX "fp8/.+_a8\\.cu$")
-  set_property(TARGET ninfer_ops PROPERTY SOURCES ${ninfer_ops_sources})
-  target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/fp8_sm86_stubs.cpp")
   target_compile_definitions(ninfer_ops PUBLIC NINFER_SM8X_COMPAT=1)
 endif()
 if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
-  target_compile_definitions(ninfer_ops PUBLIC NINFER_SM120_NVFP4=1)
+  target_compile_definitions(ninfer_ops PUBLIC NINFER_SM120_NVFP4=1 NINFER_SM120_FP8=1)
 endif()

@@ -15,6 +15,11 @@ constexpr bool kNvfp4A4Built = true;
 #    else
 constexpr bool kNvfp4A4Built = false;
 #    endif
+#    if defined(NINFER_SM120_FP8)
+constexpr bool kFp8A8Built = true;
+#    else
+constexpr bool kFp8A8Built = false;
+#    endif
 
 bool stored_as(const artifact::Reader& reader, const artifact::ParameterReference& reference,
                QType format) {
@@ -22,6 +27,18 @@ bool stored_as(const artifact::Reader& reader, const artifact::ParameterReferenc
         if (reader.geometry(part.object).format != format) { return false; }
     }
     return !reference.binding.parts.empty();
+}
+
+bool keeps_permission(const artifact::Reader& reader, const artifact::ParameterReference& reference,
+                      ops::LinearPolicy policy) {
+    switch (policy) {
+    case ops::LinearPolicy::AllowA4:
+        return kNvfp4A4Built && stored_as(reader, reference, QType::NVFP4);
+    case ops::LinearPolicy::AllowA8:
+        return kFp8A8Built && stored_as(reader, reference, QType::FP8_E4M3FN_ROW_BF16);
+    default:
+        return false;
+    }
 }
 
 } // namespace
@@ -66,9 +83,8 @@ WeightId Bindings::parameter(std::string name, artifact::Shape shape,
         // sm_86/sm_89 have no FP8 or FP4 tensor cores. A stored permission for A8/A4 activations
         // is an upper bound, not a requirement, so FP8 and NVFP4 weights run their A16 routes,
         // which dequantize the stored codes before the matmul. A 120a build on this path keeps the
-        // NVFP4 W4A4 units, and there an NVFP4 weight keeps its A4 permission.
-        if (!(kNvfp4A4Built && result.policy == ops::LinearPolicy::AllowA4 &&
-              stored_as(binder.reader(), pending.reference, QType::NVFP4))) {
+        // FP8 A8 and NVFP4 W4A4 units, and there such a weight keeps its permission.
+        if (!keeps_permission(binder.reader(), pending.reference, result.policy)) {
             result.policy = ops::LinearPolicy::A16Only;
         }
 #endif

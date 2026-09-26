@@ -81,6 +81,12 @@ otherwise; each number's setup and the full tables are in the
   batched with others, at near-tied tokens, more often than before; `--device-profile off` keeps
   the compiled schedules of the previous master. See
   [device profiles](docs/device-profiles.md).
+- **FP8 and NVFP4 at full speed on the default Blackwell build.** Every `120a` build compiles the FP8
+  A8 and NVFP4 W4A4 tensor-core units, so FP8 and NVFP4 weights run their own routes on the
+  `mma.sync` compatibility path as well. Before, an NVFP4 artifact failed at startup there and FP8
+  weights prefilled through a dequantizing route. On an RTX PRO 6000 the Qwen3.8-27B NVFP4/FP8
+  artifact prefills 4,096 tokens at 11,822 tok/s, within 1.4% of a native build, and the
+  Qwen3.6-35B-A3B NVFP4 artifact at 30,938 tok/s.
 - **Faster attention at long context.** The INT8-family small-T kernel gains tiers that split the
   QK product across producer warps and fetch the next key tile a whole iteration ahead; the fast
   prompt kernel now serves `rk8v4`, `rk4v4`, `rk4v4-e8` and `rk2v4-e8`; every prompt kernel's

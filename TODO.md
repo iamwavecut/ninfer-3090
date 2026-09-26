@@ -1111,12 +1111,15 @@ parents). The next merge from `neroued/master` will touch the same subsystem.
       **2026-09-26: gone on Blackwell, unchanged on sm_80/86/89.** The Qwen3.8 NVFP4 artifact is
       affected: `models/qwen3_5/load/prepare.cpp` forced every stored permission to A16Only on the
       compatibility path, so on an RTX PRO 6000 the default `120a` build failed in runtime planning
-      with the message above. Every `120a` build now compiles the NVFP4 W4A4 units
-      (`NINFER_SM120_NVFP4`) and keeps an NVFP4 weight's AllowA4 there; on the PRO 6000 the artifact
-      passes the prefix, scoring and DFlash2 real-model tests and answers under MTP, DFlash2 and
-      Vision, the 295 A4 cases the Op tests used to skip run and pass, and the other artifacts' greedy
-      answers are byte-identical to the build before. sm_80/86/89 have no FP4 tensor cores, so the
-      decision above still stands there.
+      with the message above. Every `120a` build now compiles the NVFP4 W4A4 and FP8 A8 units
+      (`NINFER_SM120_NVFP4`, `NINFER_SM120_FP8`) and keeps those weights' AllowA4 and AllowA8
+      permissions there. On the PRO 6000 the artifact passes the prefix, scoring and DFlash2
+      real-model tests and answers under MTP, DFlash2 and Vision; the 295 A4 and 240 A8 cases the Op
+      tests used to skip run and pass; the other artifacts' greedy answers are byte-identical to the
+      build before; and with its FP8 projections on their own route the artifact prefills 4,096
+      tokens at 11,822 tok/s, within 1.4% of a native build. Through the dequantizing A16 route its
+      quick-corpus scoring ran at 904 tok/s; it runs at 5,221 now, perplexity 4.307 then and 4.317
+      now. sm_80/86/89 have no FP4 tensor cores, so the decision above still stands there.
 
 ### 1.1 `attn_input_proj` grossly wrong at `W8 DFlash2 A16 T=112 graph phase=1` — closed
 

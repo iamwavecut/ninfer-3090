@@ -58,16 +58,15 @@ inline void cuda_synchronize(cudaStream_t stream) {
 // FP8 A8 and NVFP4 A4 execution issue tensor-core instructions that exist only on sm_100a /
 // sm_120a and have no Ampere fallback, so those translation units are compiled out under
 // NINFER_SM8X_COMPAT and their entry points throw instead. A 120a build on that path still
-// compiles the NVFP4 A4 units (NINFER_SM120_NVFP4).
-#if defined(NINFER_SM8X_COMPAT)
+// compiles both (NINFER_SM120_FP8, NINFER_SM120_NVFP4).
+#if defined(NINFER_SM8X_COMPAT) && !defined(NINFER_SM120_FP8)
 inline constexpr bool kA8ExecutionAvailable = false;
-#    if defined(NINFER_SM120_NVFP4)
-inline constexpr bool kA4ExecutionAvailable = true;
-#    else
-inline constexpr bool kA4ExecutionAvailable = false;
-#    endif
 #else
 inline constexpr bool kA8ExecutionAvailable = true;
+#endif
+#if defined(NINFER_SM8X_COMPAT) && !defined(NINFER_SM120_NVFP4)
+inline constexpr bool kA4ExecutionAvailable = false;
+#else
 inline constexpr bool kA4ExecutionAvailable = true;
 #endif
 

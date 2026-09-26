@@ -24,24 +24,24 @@ project(ninfer LANGUAGES C CXX CUDA)
 # would not otherwise see it. Defining it globally keeps a single consistent answer for every
 # target, including apps/ninfer-perplexity, whose upstream default KV profile is FP8.
 #
-# A 120a build gets the same path by default. Its FP8 tensor-core routes would be genuinely
-# available there, but they are a separate, unqualified code path, while the compatibility one is
-# the tested route and is the only one that promotes T2G128 weights to the integer-activation
-# prefill GEMM. Set NINFER_SM120_NATIVE=ON to build the Blackwell translation units instead.
+# A 120a build gets the same path by default. Upstream's native routes would be available there,
+# but they are a separate, unqualified code path, while the compatibility one is the tested route
+# and is the only one that promotes T2G128 weights to the integer-activation prefill GEMM. Set
+# NINFER_SM120_NATIVE=ON to build the native routes instead.
 option(NINFER_SM120_NATIVE
-       "On a 120a build, compile the Blackwell FP8 units and native routes instead of the mma.sync path"
-       OFF)
+       "On a 120a build, compile upstream's native routes instead of the mma.sync path" OFF)
 if(CMAKE_CUDA_ARCHITECTURES MATCHES "^(80|86|89)$" OR NOT NINFER_SM120_NATIVE)
   set(NINFER_COMPAT_PATH ON)
   add_compile_definitions(NINFER_SM8X_COMPAT=1)
 else()
   set(NINFER_COMPAT_PATH OFF)
 endif()
-# Every 120a build keeps the NVFP4 W4A4 units, the compatibility path included: an NVFP4 weight
-# has no route wider than 16 columns without them, so an NVFP4 artifact could not start. They are
-# selected only by NVFP4 weights, so every other format keeps the path chosen above.
+# Every 120a build keeps the FP8 A8 and NVFP4 W4A4 units, the compatibility path included: without
+# them an NVFP4 weight has no route wider than 16 columns, so an NVFP4 artifact could not start, and
+# FP8 weights prefill through their dequantizing A16 route. They are selected only by FP8 and NVFP4
+# weights, so every other format keeps the path chosen above.
 if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
-  add_compile_definitions(NINFER_SM120_NVFP4=1)
+  add_compile_definitions(NINFER_SM120_NVFP4=1 NINFER_SM120_FP8=1)
 endif()
 
 # --- Global settings ---------------------------------------------------------
