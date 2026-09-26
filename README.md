@@ -64,9 +64,11 @@ otherwise; each number's setup and the full tables are in the
   decodes each weight once for every column, prompts through llama.cpp's integer tensor-core kernel.
   MTP, DFlash2 and Vision work as with the official artifact. The 3.5-bit GSQ-RCO IQ3_S model scores
   the WikiText-2 perplexity its card states (7.071 against 7.07; the official artifact scores 7.286)
-  at 10.95 GiB of weights instead of 15.9, and on the same card it decodes faster than the official
-  artifact: 59.9 against 40.3 tok/s on an RTX 3090 and 107.5 against 88.1 on an RTX 5090 without
-  speculation, 146 against 109 on an RTX 4090 with MTP. See [GGUF block formats](docs/gguf.md).
+  at 10.95 GiB of weights instead of 15.9, scores 80.3% on IFBench, 100% on AIME 2025 and 2026 and
+  88.4% on GPQA-Diamond (the official artifact: 77.7, 96.7, 96.7 and 87.4), and on the same card it
+  decodes faster than the official artifact: 59.9 against 40.3 tok/s on an RTX 3090 and 107.5
+  against 88.1 on an RTX 5090 without speculation, 146 against 109 on an RTX 4090 with MTP. See
+  [GGUF block formats](docs/gguf.md).
 - **Device route profiles for every GPU.** Which kernel schedule serves each operation and width
   is looked up in the card's measured profile before the compiled tables, which were tuned on one
   card. Profiles measured on the RTX 3090, 4090 and 5090 are built in; any other GPU is calibrated

@@ -32,9 +32,9 @@ for a network-free example.
 The published Qwen3.6 reasoning runs retain their exact configurations in
 [`configs/qwen3_6_27b_reasoning.yaml`](configs/qwen3_6_27b_reasoning.yaml),
 [`configs/qwen3_6_35b_aime.yaml`](configs/qwen3_6_35b_aime.yaml), and
-[`configs/qwen3_6_35b_gpqa.yaml`](configs/qwen3_6_35b_gpqa.yaml). The Qwen3.8 groupwise-int and
-NVFP4 campaigns use their format-specific reasoning configurations and managed scripts documented
-below.
+[`configs/qwen3_6_35b_gpqa.yaml`](configs/qwen3_6_35b_gpqa.yaml). The Qwen3.8 groupwise-int,
+NVFP4 and GSQ-RCO IQ3_S campaigns use their format-specific reasoning configurations and managed
+scripts documented below.
 
 [`configs/qwen3_6_35b_needle_haystack.yaml`](configs/qwen3_6_35b_needle_haystack.yaml)
 defines the 35B-A3B Needle-in-a-Haystack profiles separately: `standard` preserves EvalScope's
@@ -190,6 +190,18 @@ RealWorldQA at 618/765 samples):
 | GPQA-Diamond | 87.37% | 173 / 198 |
 | ERQA | 66.25% | 265 / 400 |
 | RealWorldQA | 82.22% | 629 / 765 |
+
+The GSQ-RCO IQ3_S artifact (3.5 bits per weight, [GGUF block formats](../docs/gguf.md)) ran the text
+step of the same protocol through `eval/run_qwen3_8_27b_gsq_rco_reasoning.sh` on an RTX 5090: the
+full 262,144-token context, concurrency four and GPQA-Diamond at one (run directory
+`eval/runs/20260925T190041Z-078bd8e0`). The multimodal step was not run.
+
+| Benchmark | Accuracy | Correct / total |
+|---|---:|---:|
+| IFBench (prompt-level strict) | 80.33% | 241 / 300 |
+| AIME 2025 | 100.00% | 30 / 30 |
+| AIME 2026 | 100.00% | 30 / 30 |
+| GPQA-Diamond | 88.38% | 175 / 198 |
 
 Prepare and inspect Needle-in-a-Haystack without issuing model requests:
 

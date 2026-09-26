@@ -62,6 +62,19 @@ blank lines, disjoint 2,048-token windows, `ninfer-perplexity --disjoint`, BF16 
 | BF16 base model, model card | 7.05 |
 | Official Qwen3.8-27B NInfer artifact | 7.286 |
 
+The reasoning benchmarks of the [capability evaluation](../eval/README.md), with the protocol the
+official artifact was scored with (EvalScope, temperature 1.0, one sampled run each, an RTX 5090):
+
+| Benchmark | GSQ-RCO IQ3_S in NInfer | Official Qwen3.8-27B NInfer artifact |
+|---|---:|---:|
+| IFBench (prompt-level strict) | 80.33% | 77.67% |
+| AIME 2025 | 100.00% | 96.67% |
+| AIME 2026 | 100.00% | 96.67% |
+| GPQA-Diamond | 88.38% | 87.37% |
+
+The GSQ-RCO card reports 100 on AIME 2025 and 89.39 on GPQA-Diamond with its own protocol (BF16:
+100 and 89.90). One run of GPQA-Diamond's 198 questions varies by about two points.
+
 Speed against the official artifact on the same card in the same sitting, `rk8v4` KV, one request,
 greedy, thinking off, with the reference client (`tools/bench/refbench.py`): an RTX 3090 at 420 W
 and an RTX 4090 at 450 W with a 176,128-token window (the official DFlash2 row on the RTX 4090 at
